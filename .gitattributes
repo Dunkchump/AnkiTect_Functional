@@ -1,0 +1,14 @@
+# Auto detect text files and normalize line endings to LF
+* text=auto
+*.py text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+*.csv text eol=lf
+*.json text eol=lf
+
+# Binary files
+*.apkg binary
+*.jpg binary
+*.png binary
+*.gif binary
+*.mp3 binary
