@@ -8,6 +8,7 @@ data/output/
 data/cache/
 voice_samples/
 .env
+settings.json
 
 # Python
 __pycache__/

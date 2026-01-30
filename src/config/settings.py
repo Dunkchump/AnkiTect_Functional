@@ -1,7 +1,19 @@
 """Global settings and configuration."""
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+
+# Load .env file if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    # Load from project root
+    _env_path = Path(__file__).parent.parent.parent / ".env"
+    load_dotenv(_env_path)
+except ImportError:
+    pass  # python-dotenv not installed, use environment variables directly
+
 from .languages import LANG_CONFIG
 
 # Поточна обрана мова
@@ -37,9 +49,9 @@ class Config:
     
     # Pollinations API Configuration
     # Get your API key from https://enter.pollinations.ai/
-    # Store in environment variable: POLLINATIONS_API_KEY
-    # Or set directly here (never commit secret keys!)
-    POLLINATIONS_API_KEY: str = ""  # sk_... or pk_...
+    # Store in environment variable or .env file: POLLINATIONS_API_KEY
+    # NEVER hardcode secret keys in source code!
+    POLLINATIONS_API_KEY: str = os.environ.get("POLLINATIONS_API_KEY", "")
     POLLINATIONS_API_URL: str = "https://gen.pollinations.ai/image"
     POLLINATIONS_IMAGE_MODEL: str = "zimage"  # Options: zimage, flux, turbo, gptimage, seedream, nanobanana
     
@@ -49,9 +61,13 @@ class Config:
     TIMEOUT: int = 60
     IMAGE_TIMEOUT: int = 90
     
-    # Шляхи до файлів
-    MEDIA_DIR: str = "media"
-    CSV_FILE: str = "vocabulary.csv"
-    CACHE_DIR: str = "data/cache"
-    OUTPUT_DIR: str = "data/output"
-    INPUT_DIR: str = "data/input"
+    # Cross-platform paths using pathlib
+    # BASE_DIR is the project root (parent of src/)
+    BASE_DIR: Path = Path(__file__).parent.parent.parent.resolve()
+    
+    # Шляхи до файлів (cross-platform compatible)
+    MEDIA_DIR: str = str(BASE_DIR / "media")
+    CSV_FILE: str = str(BASE_DIR / "vocabulary.csv")
+    CACHE_DIR: str = str(BASE_DIR / "data" / "cache")
+    OUTPUT_DIR: str = str(BASE_DIR / "data" / "output")
+    INPUT_DIR: str = str(BASE_DIR / "data" / "input")

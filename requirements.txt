@@ -1,5 +1,12 @@
-genanki>=1.13.0
-pandas>=2.0.0
-edge-tts>=0.2.0
-aiohttp>=3.8.0
+# AnkiTect Dependencies
+# For reproducible builds, use requirements-lock.txt instead
+
+genanki>=0.13.0,<1.0.0
+pandas>=2.0.0,<3.0.0
+edge-tts>=6.0.0
+aiohttp>=3.8.0,<4.0.0
 tqdm>=4.67.0
+flet>=0.25.0,<0.30.0  # Pin to 0.25.x-0.29.x to avoid breaking changes
+python-dotenv>=1.0.0
+aiofiles>=23.0.0
+Pillow>=10.0.0,<12.0.0

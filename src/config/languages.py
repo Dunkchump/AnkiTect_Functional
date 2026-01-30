@@ -2,7 +2,7 @@
 
 LANG_CONFIG = {
     "DE": {
-        "deck_name": "DE Das Fundament",
+        "deck_name": "Testament Deutsch",
         "voice": "de-DE-ConradNeural",
         "voice_id": "CONRAD",
         "label": "DEUTSCH",
@@ -22,7 +22,7 @@ LANG_CONFIG = {
         }
     },
     "EN": {
-        "deck_name": "GB The Cornerstone",
+        "deck_name": "Testament English",
         "voice": "en-GB-SoniaNeural",
         "voice_id": "SONIA",
         "label": "ENGLISH",

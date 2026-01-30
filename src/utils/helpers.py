@@ -1,8 +1,27 @@
 """Utility functions."""
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import Optional
+
+
+def normalize_text(text: str) -> str:
+    """
+    Normalize text to NFC form for consistent Unicode handling.
+    
+    This prevents issues with characters like é being represented as
+    either a single codepoint (NFC) or base + combining accent (NFD).
+    
+    Args:
+        text: Input text
+        
+    Returns:
+        NFC-normalized text
+    """
+    if not text:
+        return ""
+    return unicodedata.normalize('NFC', str(text))
 
 
 def clean_text_for_display(text: str) -> str:
@@ -10,7 +29,10 @@ def clean_text_for_display(text: str) -> str:
     if not text:
         return ""
     
-    lines = re.split(r'(<br>|\n)', str(text))
+    # Normalize Unicode first
+    text = normalize_text(str(text))
+    
+    lines = re.split(r'(<br>|\n)', text)
     cleaned_lines = []
     
     for line in lines:
@@ -27,7 +49,10 @@ def format_analogues_html(text: str) -> str:
     if not text or str(text).lower() == 'nan':
         return ""
     
-    lines = re.split(r'\n|<br\s*/?>', str(text))
+    # Normalize Unicode first
+    text = normalize_text(str(text))
+    
+    lines = re.split(r'\n|<br\s*/?>', text)
     html_out = '<table class="analogues-table">'
     
     for line in lines:

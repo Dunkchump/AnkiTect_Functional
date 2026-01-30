@@ -1,0 +1,14 @@
+# AnkiTect Production Dependencies - Pinned Versions
+# Generated: 2026-01-12
+# Use this file for production deployments to ensure reproducibility
+# Install with: pip install -r requirements-lock.txt
+
+genanki==0.13.1
+pandas==2.1.4
+edge-tts==6.1.12
+aiohttp==3.9.1
+tqdm==4.67.0
+flet==0.25.2
+python-dotenv==1.0.0
+aiofiles==23.2.1
+Pillow==10.2.0
