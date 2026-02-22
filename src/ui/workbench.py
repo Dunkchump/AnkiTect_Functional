@@ -33,6 +33,7 @@ from src.fetchers import AudioFetcher, ImageFetcher
 from src.utils.parsing import TextParser
 from src.services import VocabularyService
 from src.ui.card_preview import CardPreviewView, create_card_preview
+from src.ui.theme import show_snackbar
 from src.ui.card_types_editor import CardTypesEditor
 from src.templates import CardTemplates
 
@@ -132,6 +133,7 @@ class WorkbenchView:
 
         # Style editor references
         self._style_fields: Dict[str, ft.TextField] = {}
+        self._style_previews: Dict[str, ft.Container] = {}
         self._style_status: Optional[ft.Text] = None
         self._active_style_key: Optional[str] = None
         self._preview_update_version: int = 0
@@ -176,28 +178,20 @@ class WorkbenchView:
         return self._container
     
     def _load_data(self) -> None:
-        """Load vocabulary data from CSV."""
-        csv_path = Path(Config.CSV_FILE)
-        
-        if not csv_path.exists():
-            self.df = pd.DataFrame()
-            self._current_page = 0
-            self._live_preview_enabled = self._get_default_live_preview()
-            self._adjust_page_size_for_perf()
-            return
-        
+        """Load vocabulary data via VocabularyService."""
         try:
-            self.df = pd.read_csv(csv_path, sep='|', encoding='utf-8-sig').fillna('')
-            self.df.columns = self.df.columns.str.strip()
-            self._current_page = 0
-            self._live_preview_enabled = self._get_default_live_preview()
-            self._adjust_page_size_for_perf()
+            success = self._vocab_service.load()
+            if success:
+                self.df = self._vocab_service.get_all()
+            else:
+                self.df = pd.DataFrame()
         except Exception as e:
-            print(f"Error loading CSV: {e}")
+            print(f"Error loading vocabulary: {e}")
             self.df = pd.DataFrame()
-            self._current_page = 0
-            self._live_preview_enabled = self._get_default_live_preview()
-            self._adjust_page_size_for_perf()
+        
+        self._current_page = 0
+        self._live_preview_enabled = self._get_default_live_preview()
+        self._adjust_page_size_for_perf()
     
     def _truncate_text(self, text: str, max_length: int = None) -> str:
         """Truncate text to max length with ellipsis."""
@@ -217,10 +211,13 @@ class WorkbenchView:
             if self._audio_player:
                 try:
                     self._audio_player.pause()
-                    if self._audio_player in self.page.overlay:
-                        self.page.overlay.remove(self._audio_player)
                 except Exception:
                     pass
+                # Clean up ALL stale audio controls from overlay
+                self.page.overlay[:] = [
+                    ctrl for ctrl in self.page.overlay
+                    if not isinstance(ctrl, ft.Audio)
+                ]
             
             # Create new audio player with the file
             self._audio_player = ft.Audio(
@@ -331,7 +328,7 @@ class WorkbenchView:
                     ),
                     ft.Container(height=20),
                     ft.ElevatedButton(
-                        text="Reload Data",
+                        "Reload Data",
                         icon=ft.Icons.REFRESH,
                         on_click=lambda _: self._reload_data(),
                     ),
@@ -496,7 +493,7 @@ class WorkbenchView:
             label_style=ft.TextStyle(color=ft.Colors.WHITE54),
             text_style=ft.TextStyle(color=ft.Colors.WHITE),
         )
-        self._page_size_dropdown.on_change = self._on_page_size_change
+        self._page_size_dropdown.on_select = self._on_page_size_change
 
         self._update_pagination_ui()
 
@@ -1018,6 +1015,7 @@ class WorkbenchView:
         """Build styles editor for card appearance."""
         style = self._get_style_config()
         self._style_fields.clear()
+        self._style_previews.clear()
 
         self._style_status = ft.Text("Saved", size=10, color=ft.Colors.WHITE38)
 
@@ -1088,6 +1086,7 @@ class WorkbenchView:
                 bgcolor=style.get(key, "#000000"),
                 border=ft.border.all(1, ft.Colors.WHITE12),
             )
+            self._style_previews[key] = preview
 
             return ft.Column(
                 controls=[
@@ -1302,6 +1301,9 @@ class WorkbenchView:
         if self._style_status:
             self._style_status.value = "Editing..."
             self._style_status.color = ft.Colors.WHITE54
+        # Update color preview square if it exists
+        if key in self._style_previews:
+            self._style_previews[key].bgcolor = value
         self._schedule_preview_update()
         self._schedule_style_save()
 
@@ -2029,7 +2031,10 @@ class WorkbenchView:
                 return
             self._update_card_preview()
 
-        asyncio.create_task(_debounced())
+        try:
+            self.page.run_task(_debounced)
+        except Exception:
+            pass  # Silently ignore if page is not ready
 
     def _schedule_style_save(self) -> None:
         """Debounce style persistence to avoid frequent disk writes."""
@@ -2048,7 +2053,10 @@ class WorkbenchView:
             if self.page:
                 self.page.update()
 
-        asyncio.create_task(_debounced())
+        try:
+            self.page.run_task(_debounced)
+        except Exception:
+            pass  # Silently ignore if page is not ready
     
     def _update_card_preview(self, force: bool = False) -> None:
         """Update the card preview with current row data."""
@@ -2117,7 +2125,6 @@ class WorkbenchView:
     
     def _on_generate_audio(self, key: str, text: str) -> None:
         """Handle audio generation button click."""
-        print(f"[DEBUG] _on_generate_audio called for key='{key}', text='{text[:30] if text else 'None'}...'")
         if not text or not text.strip():
             self._show_snackbar("No text to generate audio for", error=True)
             return
@@ -2127,15 +2134,14 @@ class WorkbenchView:
     
     async def _generate_audio_async(self, key: str, text: str) -> None:
         """Generate audio asynchronously."""
-        # Show loading
-        if key in self._audio_loading:
-            self._audio_loading[key].visible = True
-        if self._audio_status:
-            self._audio_status.value = f"Generating audio for {key}..."
-            self._audio_status.color = ft.Colors.AMBER_400
-        self.page.update()
-        
         try:
+            # Show loading
+            if key in self._audio_loading:
+                self._audio_loading[key].visible = True
+            if self._audio_status:
+                self._audio_status.value = f"Generating audio for {key}..."
+                self._audio_status.color = ft.Colors.AMBER_400
+            self.page.update()
             # Create temp file
             temp_dir = tempfile.gettempdir()
             audio_hash = hashlib.md5(text.encode()).hexdigest()[:8]
@@ -2176,59 +2182,48 @@ class WorkbenchView:
     
     def _on_generate_image(self, prompt: str) -> None:
         """Handle image generation button click."""
-        print(f"[DEBUG] _on_generate_image called with prompt: '{prompt[:50] if prompt else 'None'}...'")
-        
         if self._is_generating_image:
-            print("[DEBUG] Already generating, skipping")
             return  # Prevent double-click
         
         if not prompt or not prompt.strip():
             self._show_snackbar("No prompt to generate image from", error=True)
             return
         
-        print(f"[DEBUG] Starting async image generation")
         # Run async generation
         self.page.run_task(self._generate_image_async, prompt)
     
     async def _generate_image_async(self, prompt: str) -> None:
         """Generate image asynchronously."""
-        print(f"[DEBUG] _generate_image_async started")
-        # Prevent double-click and show loading state
-        self._is_generating_image = True
-        
-        # Disable button - it's now an IconButton
-        if self._image_gen_button:
-            self._image_gen_button.disabled = True
-        
-        # Update image container to show loading
-        if self._image_container:
-            self._image_container.content = ft.Column(
-                controls=[
-                    ft.ProgressRing(width=40, height=40, stroke_width=3),
-                    ft.Text("Generating image...", size=12, color=ft.Colors.INDIGO_200),
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                alignment=ft.MainAxisAlignment.CENTER,
-            )
-        self.page.update()
-        
         try:
+            # Prevent double-click and show loading state
+            self._is_generating_image = True
+            
+            # Disable button - it's now an IconButton
+            if self._image_gen_button:
+                self._image_gen_button.disabled = True
+            
+            # Update image container to show loading
+            if self._image_container:
+                self._image_container.content = ft.Column(
+                    controls=[
+                        ft.ProgressRing(width=40, height=40, stroke_width=3),
+                        ft.Text("Generating image...", size=12, color=ft.Colors.INDIGO_200),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    alignment=ft.MainAxisAlignment.CENTER,
+                )
+            self.page.update()
             # Create temp file
             temp_dir = tempfile.gettempdir()
             img_hash = hashlib.md5(prompt.encode()).hexdigest()[:8]
             temp_path = os.path.join(temp_dir, f"ankitect_img_{img_hash}.jpg")
-            print(f"[DEBUG] Generating image to: {temp_path}")
             
             # Generate image
             success = await self._image_fetcher.fetch(prompt, temp_path)
-            print(f"[DEBUG] Image generation result: {success}, file exists: {os.path.exists(temp_path)}")
             
             if success and os.path.exists(temp_path):
-                print(f"[DEBUG] Image generated successfully, updating container")
                 # Update image container with the generated image
-                # Use absolute path for Flet
                 abs_image_path = os.path.abspath(temp_path)
-                print(f"[DEBUG] Setting image src to: {abs_image_path}")
                 if self._image_container:
                     self._image_container.content = ft.Image(
                         src=abs_image_path,
@@ -2245,7 +2240,6 @@ class WorkbenchView:
                 
                 self._show_snackbar("Image generated successfully!")
             else:
-                print(f"[DEBUG] Image generation failed")
                 if self._image_container:
                     self._image_container.content = ft.Column(
                         controls=[
@@ -2295,28 +2289,7 @@ class WorkbenchView:
     
     def _show_snackbar(self, message: str, error: bool = False, icon: str = None) -> None:
         """Show a snackbar notification."""
-        snackbar = ft.SnackBar(
-            content=ft.Row(
-                controls=[
-                    ft.Icon(
-                        icon or (ft.Icons.ERROR if error else ft.Icons.INFO),
-                        color=ft.Colors.WHITE,
-                        size=18,
-                    ),
-                    ft.Text(message, color=ft.Colors.WHITE),
-                ],
-                spacing=10,
-            ),
-            bgcolor=ft.Colors.RED_700 if error else ft.Colors.GREEN_700,
-            duration=3000,
-        )
-        # Clean up old snackbars to prevent memory leak
-        for ctrl in list(self.page.overlay):
-            if isinstance(ctrl, ft.SnackBar):
-                self.page.overlay.remove(ctrl)
-        self.page.overlay.append(snackbar)
-        snackbar.open = True
-        self.page.update()
+        show_snackbar(self.page, message, error=error, icon=icon)
     
     def _reload_data(self) -> None:
         """Reload data from CSV."""
@@ -2461,7 +2434,7 @@ class WorkbenchView:
             return False
         
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             # Run sync I/O in executor to not block event loop
             await loop.run_in_executor(None, self._save_data_sync)
             return True

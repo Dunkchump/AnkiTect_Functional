@@ -32,6 +32,7 @@ class CacheManager:
         
         self.cache_file = cache_file
         self._lock = Lock()  # Thread lock for sync operations
+        self._async_lock_init_lock = Lock()  # Guard for lazy async lock init
         self._async_lock: Optional[asyncio.Lock] = None  # Lazy init for async
         self.cache: Dict = self._load_cache()
         
@@ -40,9 +41,11 @@ class CacheManager:
         self._batch_size = 10  # Write to disk every N entries
     
     def _get_async_lock(self) -> asyncio.Lock:
-        """Get or create async lock (lazy initialization)."""
+        """Get or create async lock (lazy initialization, thread-safe)."""
         if self._async_lock is None:
-            self._async_lock = asyncio.Lock()
+            with self._async_lock_init_lock:
+                if self._async_lock is None:
+                    self._async_lock = asyncio.Lock()
         return self._async_lock
     
     def _load_cache(self) -> Dict:
@@ -81,7 +84,7 @@ class CacheManager:
         """Save cache to file (async-safe)."""
         async with self._get_async_lock():
             # Run sync save in executor to avoid blocking
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._save_internal)
     
     def is_cached(self, filename: str, min_size: int = 500) -> bool:
@@ -95,26 +98,28 @@ class CacheManager:
         Returns:
             True if file is cached and valid, False otherwise
         """
+        # Fast dict lookup under lock — no I/O
         with self._lock:
             if filename not in self.cache:
                 return False
-            
-            # Check if file still exists
-            file_path = os.path.join(Config.MEDIA_DIR, filename)
-            if os.path.exists(file_path):
-                try:
-                    if os.path.getsize(file_path) > min_size:
-                        return True
-                except OSError:
-                    pass
-            
-            # Clean up stale cache entry
-            del self.cache[filename]
-            self._pending_writes.append(filename)
-            if len(self._pending_writes) >= self._batch_size:
-                self._save_internal()
-                self._pending_writes.clear()
-            return False
+
+        # Slow I/O check outside lock to avoid blocking other threads
+        file_path = os.path.join(Config.MEDIA_DIR, filename)
+        try:
+            if os.path.exists(file_path) and os.path.getsize(file_path) > min_size:
+                return True
+        except OSError:
+            pass
+
+        # Stale entry — re-acquire lock only for cleanup
+        with self._lock:
+            if filename in self.cache:
+                del self.cache[filename]
+                self._pending_writes.append(filename)
+                if len(self._pending_writes) >= self._batch_size:
+                    self._save_internal()
+                    self._pending_writes.clear()
+        return False
     
     def mark_cached(self, filename: Union[str, List[str]]) -> None:
         """
@@ -138,17 +143,9 @@ class CacheManager:
                 self._pending_writes.clear()
     
     async def mark_cached_async(self, filename: Union[str, List[str]]) -> None:
-        """Mark file(s) as cached (async-safe)."""
-        async with self._get_async_lock():
-            if isinstance(filename, list):
-                for f in filename:
-                    self.cache[f] = datetime.now().isoformat()
-            else:
-                self.cache[filename] = datetime.now().isoformat()
-            
-            # For async, always save immediately to prevent data loss
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._save_internal)
+        """Mark file(s) as cached (async-safe, uses thread lock via executor)."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.mark_cached, filename)
     
     def flush(self) -> None:
         """Flush any pending writes to disk."""

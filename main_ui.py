@@ -14,7 +14,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import flet as ft
-from typing import Callable, Dict, Optional
+from typing import Callable
 
 from src.ui.workbench import WorkbenchView
 from src.ui.dashboard import DashboardView
@@ -107,40 +107,24 @@ class AnkiTectApp:
         self.page.window.height = 850
     
     def _init_views(self) -> None:
-        """Initialize all view containers."""
-        # Create dashboard view with page reference for build process
-        self.dashboard = DashboardView(self.page)
+        """Initialize all views eagerly — simpler and more reliable."""
+        self._dashboard = DashboardView(self.page)
+        self._workbench = WorkbenchView(self.page)
+        self._settings_view = SettingsView(self.page)
         
-        # Create workbench view with page reference for updates
-        self.workbench = WorkbenchView(self.page)
+        self._views = [
+            self._dashboard.container,
+            self._workbench.container,
+            self._settings_view.container,
+        ]
         
-        # Create settings view with page reference
-        self.settings = SettingsView(self.page)
-        
-        self.views: Dict[int, ft.Container] = {
-            0: self.dashboard.container,
-            1: self.workbench.container,
-            2: self.settings.container,
-        }
-        self.current_view_index: int = 0        
-        # Set up drag & drop handler for CSV files
-        self.page.on_drop = self._on_file_drop
+        self.current_view_index: int = 0
     
-    def _on_file_drop(self, e) -> None:
-        """Handle file drop events."""
-        if e.data:
-            # FileDrop event returns file paths as data
-            file_path = e.data
-            if file_path.lower().endswith('.csv'):
-                # Import CSV through dashboard
-                self.dashboard._import_csv(file_path)
-            else:
-                self.dashboard._show_snackbar("Please drop a CSV file", error=True)    
     def _build_ui(self) -> None:
         """Build the main UI layout."""
-        # Content area container with subtle shadow
+        # Content area — shows one view at a time via content swapping
         self.content_area = ft.Container(
-            content=self.views[0],
+            content=self._views[0],
             expand=True,
             padding=24,
             border_radius=ft.BorderRadius.only(
@@ -196,7 +180,7 @@ class AnkiTectApp:
                     # Version info at bottom
                     ft.Container(
                         content=ft.Text(
-                            "v1.0.0",
+                            "v2.0.0",
                             size=11,
                             color=ft.Colors.WHITE24,
                             text_align=ft.TextAlign.CENTER,
@@ -234,8 +218,44 @@ class AnkiTectApp:
         if index == self.current_view_index:
             return
         
+        # Warn about unsaved changes when leaving workbench
+        if (
+            self.current_view_index == 1
+            and self._workbench is not None
+            and self._workbench._has_unsaved_changes
+        ):
+            target = index  # capture for closures
+            
+            def _confirm_leave(e):
+                self.page.pop_dialog()
+                self._workbench._has_unsaved_changes = False
+                self._switch_view(target)
+            
+            def _cancel(e):
+                self.page.pop_dialog()
+                self.nav_rail.selected_index = self.current_view_index
+                self.page.update()
+            
+            dlg = ft.AlertDialog(
+                modal=True,
+                title=ft.Text("Unsaved Changes"),
+                content=ft.Text(
+                    "You have unsaved changes in the Workbench. Leave without saving?"
+                ),
+                actions=[
+                    ft.TextButton("Stay", on_click=_cancel),
+                    ft.TextButton("Leave", on_click=_confirm_leave),
+                ],
+            )
+            self.page.show_dialog(dlg)
+            return
+        
+        self._switch_view(index)
+    
+    def _switch_view(self, index: int) -> None:
+        """Switch the active view by swapping content."""
         self.current_view_index = index
-        self.content_area.content = self.views[index]
+        self.content_area.content = self._views[index]
         self.page.update()
     
     def navigate_to(self, index: int) -> None:
@@ -245,9 +265,9 @@ class AnkiTectApp:
         Args:
             index: View index to navigate to
         """
-        if 0 <= index < len(self.views):
+        if 0 <= index <= 2:
             self.nav_rail.selected_index = index
-            self._on_nav_change(index)
+            self._switch_view(index)
 
 
 def main(page: ft.Page) -> None:
@@ -271,8 +291,8 @@ def main(page: ft.Page) -> None:
             ft.Container(
                 content=ft.Column(
                     controls=[
-                        ft.Text("UI failed to стартовать", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.RED_400),
-                        ft.Text("Скопируйте эту ошибку и пришлите мне:", size=12, color=ft.Colors.WHITE70),
+                        ft.Text("UI failed to start", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.RED_400),
+                        ft.Text("Copy this error and report it:", size=12, color=ft.Colors.WHITE70),
                         ft.Container(
                             content=ft.Text(error_text, size=11, selectable=True, color=ft.Colors.WHITE70),
                             padding=10,

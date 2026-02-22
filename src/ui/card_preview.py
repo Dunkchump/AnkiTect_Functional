@@ -265,6 +265,7 @@ class CardPreviewView:
     def _get_style_config(self) -> Dict[str, str]:
         """Get the current style config for preview rendering."""
         settings = SettingsManager()
+        settings.reload()  # Ensure fresh data from disk
         style = settings.get("CARD_STYLE", CardTemplates.DEFAULT_STYLE)
         return CardTemplates.normalize_style(style)
 
@@ -451,7 +452,7 @@ class CardPreviewView:
                         ft.Text(Config.LABEL, size=10, color=label_color,
                                weight=ft.FontWeight.BOLD),
                         ft.Container(height=10),
-                        ft.Text(target_word, size=32, color=definition_color,
+                        ft.Text(target_word, size=32, color=text_color,
                                weight=ft.FontWeight.W_800),
                         ft.Container(height=5),
                         ft.Text(pos, size=12, color=label_color, 

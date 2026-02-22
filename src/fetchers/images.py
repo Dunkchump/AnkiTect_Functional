@@ -49,18 +49,26 @@ class ImageFetcher(BaseFetcher):
         self.concurrency_callback = concurrency_callback
         self.retries = Config.RETRIES
         self._session: Optional[aiohttp.ClientSession] = None
-        self._session_lock = asyncio.Lock()
+        self._session_lock: Optional[asyncio.Lock] = None
+        self._lock_init_lock = __import__('threading').Lock()
+    
+    def _get_lock(self) -> asyncio.Lock:
+        """Lazily create the session lock in the correct event loop context (thread-safe)."""
+        if self._session_lock is None:
+            with self._lock_init_lock:
+                if self._session_lock is None:
+                    self._session_lock = asyncio.Lock()
+        return self._session_lock
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create a shared aiohttp session (connection pooling)."""
-        async with self._session_lock:
+        async with self._get_lock():
             if self._session is None or self._session.closed:
                 headers = {
                     "Authorization": f"Bearer {Config.POLLINATIONS_API_KEY}",
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                 }
                 connector = aiohttp.TCPConnector(
-                    ssl=False,
                     limit=Config.CONCURRENCY * 2,  # Connection pool size
                     limit_per_host=Config.CONCURRENCY,
                 )
@@ -74,7 +82,8 @@ class ImageFetcher(BaseFetcher):
     
     async def close(self) -> None:
         """Close the aiohttp session. Call this when done with the fetcher."""
-        async with self._session_lock:
+        lock = self._get_lock()
+        async with lock:
             if self._session and not self._session.closed:
                 await self._session.close()
                 self._session = None

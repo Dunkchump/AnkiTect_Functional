@@ -9,6 +9,7 @@ and their display order through drag-and-drop or arrow buttons.
 import flet as ft
 from typing import Callable, Dict, List, Optional
 
+from .theme import show_snackbar
 from ..config import (
     SettingsManager,
     CARD_TYPES,
@@ -364,6 +365,19 @@ class CardTypesEditor:
     def _mark_changed(self) -> None:
         self._has_changes = True
 
+    def _persist_config(self) -> None:
+        """Auto-persist card types config to settings."""
+        try:
+            validated_enabled, validated_order = validate_card_types_config(
+                self._types_enabled,
+                self._types_order,
+            )
+            self.settings.set("CARD_TYPES_ENABLED", validated_enabled)
+            self.settings.set("CARD_TYPES_ORDER", validated_order)
+            self._has_changes = False
+        except Exception:
+            pass
+
     def _on_toggle_type(self, type_id: str, enabled: bool) -> None:
         card_type = CARD_TYPES.get(type_id)
         if card_type and card_type.required:
@@ -371,6 +385,7 @@ class CardTypesEditor:
 
         self._types_enabled[type_id] = enabled
         self._mark_changed()
+        self._persist_config()
         self._refresh_list()
 
     def _on_move_type(self, type_id: str, direction: int) -> None:
@@ -385,6 +400,7 @@ class CardTypesEditor:
                 )
 
                 self._mark_changed()
+                self._persist_config()
                 self._refresh_list()
         except ValueError:
             pass
@@ -400,59 +416,43 @@ class CardTypesEditor:
             self.settings.set("CARD_TYPES_ORDER", validated_order)
 
             self._has_changes = False
-            self._show_snackbar("Card types saved successfully!", success=True)
+            self._show_snackbar("Card types saved successfully!")
 
             if self._on_save:
                 self._on_save()
 
         except Exception as ex:
-            self._show_snackbar(f"Error saving: {str(ex)}", success=False)
+            self._show_snackbar(f"Error saving: {str(ex)}", error=True)
 
     def _on_reset_click(self, e: ft.ControlEvent) -> None:
         self._types_enabled = get_default_card_types_enabled()
         self._types_order = get_default_card_types_order()
         self._mark_changed()
+        self._persist_config()
         self._refresh_list()
-        self._show_snackbar("Reset to default card types", success=True)
+        self._show_snackbar("Reset to default card types")
 
     def _on_preset_minimal(self, e: ft.ControlEvent) -> None:
         """Enable only required card types (minimal preset)."""
         for type_id, card_type in CARD_TYPES.items():
             self._types_enabled[type_id] = bool(card_type.required)
         self._mark_changed()
+        self._persist_config()
         self._refresh_list()
-        self._show_snackbar("Applied minimal preset", success=True)
+        self._show_snackbar("Applied minimal preset")
 
     def _on_preset_full(self, e: ft.ControlEvent) -> None:
         """Enable all card types (full preset)."""
         for type_id in CARD_TYPES.keys():
             self._types_enabled[type_id] = True
         self._mark_changed()
+        self._persist_config()
         self._refresh_list()
-        self._show_snackbar("Applied full preset", success=True)
+        self._show_snackbar("Applied full preset")
 
-    def _show_snackbar(self, message: str, success: bool = True) -> None:
-        snackbar = ft.SnackBar(
-            content=ft.Row(
-                controls=[
-                    ft.Icon(
-                        ft.Icons.CHECK_CIRCLE if success else ft.Icons.ERROR,
-                        color=ft.Colors.WHITE,
-                        size=18,
-                    ),
-                    ft.Text(message, color=ft.Colors.WHITE),
-                ],
-                spacing=10,
-            ),
-            bgcolor=ft.Colors.GREEN_700 if success else ft.Colors.RED_700,
-            duration=3000,
-        )
-        for ctrl in list(self.page.overlay):
-            if isinstance(ctrl, ft.SnackBar):
-                self.page.overlay.remove(ctrl)
-        self.page.overlay.append(snackbar)
-        snackbar.open = True
-        self.page.update()
+    def _show_snackbar(self, message: str, error: bool = False) -> None:
+        """Show a snackbar notification."""
+        show_snackbar(self.page, message, error=error)
 
 
 def create_card_types_editor(

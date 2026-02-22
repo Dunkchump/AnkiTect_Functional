@@ -142,7 +142,7 @@ class VocabularyService:
         Returns:
             True if loaded successfully
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, self.load)
     
     def save(self) -> bool:
@@ -170,7 +170,7 @@ class VocabularyService:
         Returns:
             True if saved successfully
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, self.save)
     
     def get_all(self) -> pd.DataFrame:

@@ -1,13 +1,13 @@
 """Main Anki deck builder."""
 
 import asyncio
+import html as html_mod
 import json
 import hashlib
 import os
 import re
 import shutil
 import time
-import unicodedata
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -28,11 +28,10 @@ from ..config import (
     validate_card_types_config,
     get_active_card_types,
 )
-from ..models import CardData
 from ..templates import CardTemplates
 from ..fetchers import AudioFetcher, ImageFetcher
 from ..services import VocabularyService
-from ..utils import clean_text_for_display, format_analogues_html, ensure_dir, get_file_size_mb
+from ..utils import ensure_dir, get_file_size_mb
 from ..utils.parsing import TextParser
 from ..utils.paths import MediaPathGenerator
 from .cache import CacheManager
@@ -178,6 +177,7 @@ class AnkiDeckBuilder:
         # Progress tracking for callback
         self._total_items: int = 0
         self._processed_items: int = 0
+        self._progress_lock = Lock()  # Protect _processed_items counter
         self._log_every: int = 1
         self._progress_every: int = 1
 
@@ -451,40 +451,47 @@ class AnkiDeckBuilder:
                 # Check cache and download/generate
                 tasks: Dict[str, Any] = {}
                 
-                # Image
-                if self.cache.is_cached(f_img):
-                    has_img = True
+                # Image (only if FETCH_IMAGES is enabled)
+                if Config.FETCH_IMAGES:
+                    if self.cache.is_cached(f_img):
+                        has_img = True
+                    else:
+                        tasks["img"] = self.image_fetcher.fetch(
+                            str(self._row_get(row, 'ImagePrompt', '')),
+                            os.path.join(Config.MEDIA_DIR, f_img)
+                        )
+                        has_img = False
                 else:
-                    tasks["img"] = self.image_fetcher.fetch(
-                        str(self._row_get(row, 'ImagePrompt', '')),
-                        os.path.join(Config.MEDIA_DIR, f_img)
-                    )
                     has_img = False
                 
-                # Word audio
-                if self.cache.is_cached(f_word):
-                    has_w = True
+                # Word audio (only if FETCH_AUDIO is enabled)
+                if Config.FETCH_AUDIO:
+                    if self.cache.is_cached(f_word):
+                        has_w = True
+                    else:
+                        tasks["word"] = self.audio_fetcher.fetch(
+                            raw_word,
+                            os.path.join(Config.MEDIA_DIR, f_word),
+                            volume="+40%"
+                        )
+                        has_w = False
                 else:
-                    tasks["word"] = self.audio_fetcher.fetch(
-                        raw_word,
-                        os.path.join(Config.MEDIA_DIR, f_word),
-                        volume="+40%"
-                    )
                     has_w = False
                 
-                # Sentence audio
+                # Sentence audio (only if FETCH_AUDIO is enabled)
                 sentence_results: Dict[int, bool] = {0: False, 1: False, 2: False}
                 sentence_files = [(f_s1, sentences[0]), (f_s2, sentences[1]), (f_s3, sentences[2])]
-                for idx, (fname, sentence) in enumerate(sentence_files):
-                    if not sentence:
-                        continue
-                    if self.cache.is_cached(fname):
-                        sentence_results[idx] = True
-                    else:
-                        tasks[f"sent_{idx}"] = self.audio_fetcher.fetch(
-                            sentence,
-                            os.path.join(Config.MEDIA_DIR, fname)
-                        )
+                if Config.FETCH_AUDIO:
+                    for idx, (fname, sentence) in enumerate(sentence_files):
+                        if not sentence:
+                            continue
+                        if self.cache.is_cached(fname):
+                            sentence_results[idx] = True
+                        else:
+                            tasks[f"sent_{idx}"] = self.audio_fetcher.fetch(
+                                sentence,
+                                os.path.join(Config.MEDIA_DIR, fname)
+                            )
 
                 task_results: Dict[str, bool] = {}
                 if tasks:
@@ -542,24 +549,33 @@ class AnkiDeckBuilder:
                 
                 self._update_progress(clean_word)
                 
+                # Helper: escape user text for safe HTML rendering in Anki cards
+                def _esc(val: str) -> str:
+                    """HTML-escape a value unless it already contains intentional HTML markup."""
+                    s = str(val)
+                    # Don't escape fields that already contain intentional HTML (<b>, <br>, <img>, <table>)
+                    if '<b>' in s or '<br' in s or '<img' in s or '<table' in s or '<tr' in s:
+                        return s
+                    return html_mod.escape(s)
+                
                 # Create note with card_uuid
                 note = genanki.Note(
                     model=self.model,
                     fields=[
                         str(self._row_get(row, 'TargetWord', '')),
-                        str(self._row_get(row, 'Meaning', '')),
-                        str(self._row_get(row, 'IPA', '')),
-                        str(self._row_get(row, 'Part_of_Speech', '')),
+                        _esc(self._row_get(row, 'Meaning', '')),
+                        _esc(self._row_get(row, 'IPA', '')),
+                        _esc(self._row_get(row, 'Part_of_Speech', '')),
                         gender,
-                        str(self._row_get(row, 'Morphology', '')),
-                        str(self._row_get(row, 'Nuance', '')),
+                        _esc(self._row_get(row, 'Morphology', '')),
+                        _esc(self._row_get(row, 'Nuance', '')),
                         sentences[0], sentences[1], sentences[2],
                         clean_trans,
-                        str(self._row_get(row, 'Etymology', '')),
-                        str(self._row_get(row, 'Mnemonic', '')),
+                        _esc(self._row_get(row, 'Etymology', '')),
+                        _esc(self._row_get(row, 'Mnemonic', '')),
                         clean_analogues,
                         f'<img src="{f_img}">' if has_img else "",
-                        str(self._row_get(row, 'Tags', '')),
+                        _esc(self._row_get(row, 'Tags', '')),
                         f"[sound:{f_word}]" if has_w else "",
                         f_s1 if has_s1 else "",
                         f_s2 if has_s2 else "",
@@ -583,10 +599,12 @@ class AnkiDeckBuilder:
     
     def _update_progress(self, word: str = "") -> None:
         """Update and emit progress."""
-        self._processed_items += 1
+        with self._progress_lock:
+            self._processed_items += 1
+            processed = self._processed_items
         if self._total_items > 0:
-            percentage = (self._processed_items / self._total_items) * 100
-            if self._should_emit_progress() or self._processed_items == self._total_items:
+            percentage = (processed / self._total_items) * 100
+            if self._should_emit_progress() or processed == self._total_items:
                 self._emit("progress", word, percentage)
     
     async def build(self, csv_file: str) -> bool:
@@ -613,6 +631,14 @@ class AnkiDeckBuilder:
             
             if df.empty:
                 self._emit("log", "ERROR: No vocabulary data found!")
+                return False
+            
+            # Validate required columns exist
+            required_cols = {"TargetWord", "Meaning"}
+            missing_cols = required_cols - set(df.columns)
+            if missing_cols:
+                self._emit("log", f"ERROR: Missing required columns: {missing_cols}")
+                self._emit("log", f"Available columns: {list(df.columns)}")
                 return False
             
             self._emit("log", f"Loaded {len(df)} rows from CSV")
@@ -758,10 +784,19 @@ class AnkiDeckBuilder:
         self._emit("log", "="*60)
     
     def _cleanup_old_backups(self, current_file: str, keep_count: int = 3) -> None:
-        """Clean up old backup files."""
+        """Clean up old backup files, keeping the N most recent."""
+        import re as _re
         base_name = current_file.replace(".apkg", "")
-        pattern = f"{base_name}_*.apkg"
-        backups = sorted(Path('.').glob(os.path.basename(pattern)), key=os.path.getmtime, reverse=True)
+        # Only match timestamped backups: <base>_YYYYMMDD_HHMMSS.apkg
+        timestamp_re = _re.compile(
+            _re.escape(os.path.basename(base_name)) + r"_\d{8}_\d{6}\.apkg$"
+        )
+        output_dir = Path(Config.OUTPUT_DIR)
+        backups = sorted(
+            [p for p in output_dir.iterdir() if timestamp_re.match(p.name)],
+            key=os.path.getmtime,
+            reverse=True,
+        )
         
         for old_backup in backups[keep_count:]:
             try:

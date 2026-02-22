@@ -1,5 +1,6 @@
 """Persistent settings manager with JSON storage and environment fallback."""
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -151,17 +152,29 @@ class SettingsManager:
         self._load_settings()
         self._initialized = True
     
+    @staticmethod
+    def _deep_merge(base: Dict, override: Dict) -> Dict:
+        """Deep merge override into base, preserving nested dict keys."""
+        result = base.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = SettingsManager._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
     def _load_settings(self) -> None:
         """Load settings from JSON file with environment variable fallback."""
-        # Start with defaults
-        self._settings = self.DEFAULTS.copy()
+        # Start with deep copy of defaults to avoid shared references
+        self._settings = copy.deepcopy(self.DEFAULTS)
         
         # Load from file if exists
         if self._settings_file.exists():
             try:
                 with open(self._settings_file, "r", encoding="utf-8") as f:
                     file_settings = json.load(f)
-                    self._settings.update(file_settings)
+                    # Deep merge to preserve nested dict keys not in the file
+                    self._settings = self._deep_merge(self._settings, file_settings)
             except (json.JSONDecodeError, IOError) as e:
                 # Log error but continue with defaults
                 print(f"Warning: Could not load settings file: {e}")
@@ -172,8 +185,9 @@ class SettingsManager:
             if env_value is not None:
                 self._settings[key] = self._parse_env_value(env_value, key)
         
-        # Ensure file exists with current settings
-        self._save_settings()
+        # Only write file if it didn't exist (first run)
+        if not self._settings_file.exists():
+            self._save_settings()
     
     def _parse_env_value(self, value: str, key: str) -> Any:
         """
@@ -248,14 +262,24 @@ class SettingsManager:
         if persist:
             self._save_settings()
     
+    def batch_set(self, updates: Dict[str, Any]) -> None:
+        """
+        Set multiple settings at once with a single disk write.
+        
+        Args:
+            updates: Dictionary of key-value pairs to set
+        """
+        self._settings.update(updates)
+        self._save_settings()
+    
     def get_all(self) -> Dict[str, Any]:
         """
-        Get a copy of all current settings.
+        Get a deep copy of all current settings.
         
         Returns:
             Dictionary containing all settings
         """
-        return self._settings.copy()
+        return copy.deepcopy(self._settings)
     
     def reset(self, key: Optional[str] = None) -> None:
         """
@@ -266,9 +290,9 @@ class SettingsManager:
         """
         if key is not None:
             if key in self.DEFAULTS:
-                self._settings[key] = self.DEFAULTS[key]
+                self._settings[key] = copy.deepcopy(self.DEFAULTS[key])
         else:
-            self._settings = self.DEFAULTS.copy()
+            self._settings = copy.deepcopy(self.DEFAULTS)
         
         self._save_settings()
     

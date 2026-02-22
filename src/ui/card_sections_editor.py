@@ -9,6 +9,7 @@ and their display order through drag-and-drop or arrow buttons.
 import flet as ft
 from typing import Any, Callable, Dict, List, Optional
 
+from .theme import show_snackbar
 from ..config import (
     SettingsManager,
     CARD_SECTIONS,
@@ -394,14 +395,14 @@ class CardSectionsEditor:
             self.settings.set("CARD_SECTIONS_ORDER", validated_order)
             
             self._has_changes = False
-            self._show_snackbar("Card layout saved successfully!", success=True)
+            self._show_snackbar("Card layout saved successfully!")
             
             # Notify save callback
             if self._on_save:
                 self._on_save()
                 
         except Exception as ex:
-            self._show_snackbar(f"Error saving: {str(ex)}", success=False)
+            self._show_snackbar(f"Error saving: {str(ex)}", error=True)
     
     def _on_reset_click(self, e: ft.ControlEvent) -> None:
         """Handle reset button click."""
@@ -409,32 +410,11 @@ class CardSectionsEditor:
         self._sections_order = get_default_order()
         self._mark_changed()
         self._refresh_list()
-        self._show_snackbar("Reset to default layout", success=True)
+        self._show_snackbar("Reset to default layout")
     
-    def _show_snackbar(self, message: str, success: bool = True) -> None:
+    def _show_snackbar(self, message: str, error: bool = False) -> None:
         """Show a snackbar notification."""
-        snackbar = ft.SnackBar(
-            content=ft.Row(
-                controls=[
-                    ft.Icon(
-                        ft.Icons.CHECK_CIRCLE if success else ft.Icons.ERROR,
-                        color=ft.Colors.WHITE,
-                        size=18,
-                    ),
-                    ft.Text(message, color=ft.Colors.WHITE),
-                ],
-                spacing=10,
-            ),
-            bgcolor=ft.Colors.GREEN_700 if success else ft.Colors.RED_700,
-            duration=3000,
-        )
-        # Clean up old snackbars
-        for ctrl in list(self.page.overlay):
-            if isinstance(ctrl, ft.SnackBar):
-                self.page.overlay.remove(ctrl)
-        self.page.overlay.append(snackbar)
-        snackbar.open = True
-        self.page.update()
+        show_snackbar(self.page, message, error=error)
 
 
 def create_card_sections_editor(

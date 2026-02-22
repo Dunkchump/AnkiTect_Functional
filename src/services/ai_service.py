@@ -299,10 +299,20 @@ Rules:
         
         provider = provider_map.get(provider_name, AIProvider.OPENAI)
         
+        # Select API key based on resolved provider
+        provider_key_map = {
+            AIProvider.OPENAI: "OPENAI_API_KEY",
+            AIProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
+            AIProvider.GROQ: "GROQ_API_KEY",
+            AIProvider.OLLAMA: None,  # Ollama doesn't need API key
+        }
+        env_key_name = provider_key_map.get(provider, "OPENAI_API_KEY")
+        api_key = os.environ.get(env_key_name, "") if env_key_name else None
+        
         return AIConfig(
             provider=provider,
             model=os.environ.get("AI_MODEL", model_defaults.get(provider, "gpt-4o-mini")),
-            api_key=os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY"),
+            api_key=api_key,
             base_url=os.environ.get("AI_BASE_URL"),
             temperature=float(os.environ.get("AI_TEMPERATURE", "0.7")),
         )
@@ -568,6 +578,17 @@ def create_ai_service(
         "groq": AIProvider.GROQ,
     }.get(provider.lower(), AIProvider.OPENAI)
     
+    # Select API key by provider if not explicitly provided
+    if api_key is None:
+        provider_key_map = {
+            AIProvider.OPENAI: "OPENAI_API_KEY",
+            AIProvider.ANTHROPIC: "ANTHROPIC_API_KEY",
+            AIProvider.GROQ: "GROQ_API_KEY",
+            AIProvider.OLLAMA: None,
+        }
+        env_key_name = provider_key_map.get(provider_enum, "OPENAI_API_KEY")
+        api_key = os.environ.get(env_key_name, "") if env_key_name else None
+    
     config = AIConfig(
         provider=provider_enum,
         model=model or {
@@ -576,7 +597,7 @@ def create_ai_service(
             AIProvider.OLLAMA: "llama3.2",
             AIProvider.GROQ: "llama-3.1-8b-instant",
         }.get(provider_enum, "gpt-4o-mini"),
-        api_key=api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY"),
+        api_key=api_key,
     )
     
     return AIService(config)

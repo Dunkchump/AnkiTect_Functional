@@ -1,75 +1,23 @@
-"""Utility functions."""
+"""Utility functions.
 
-import re
-import unicodedata
+Note: clean_text_for_display and format_analogues_html delegate to
+TextParser (src.utils.parsing) which is the canonical source.
+These wrappers are kept for backward compatibility.
+"""
+
 from pathlib import Path
-from typing import Optional
 
-
-def normalize_text(text: str) -> str:
-    """
-    Normalize text to NFC form for consistent Unicode handling.
-    
-    This prevents issues with characters like é being represented as
-    either a single codepoint (NFC) or base + combining accent (NFD).
-    
-    Args:
-        text: Input text
-        
-    Returns:
-        NFC-normalized text
-    """
-    if not text:
-        return ""
-    return unicodedata.normalize('NFC', str(text))
+from .parsing import TextParser
 
 
 def clean_text_for_display(text: str) -> str:
-    """Clean translation text for card display."""
-    if not text:
-        return ""
-    
-    # Normalize Unicode first
-    text = normalize_text(str(text))
-    
-    lines = re.split(r'(<br>|\n)', text)
-    cleaned_lines = []
-    
-    for line in lines:
-        if line in ['<br>', '\n']:
-            cleaned_lines.append(line)
-        else:
-            cleaned_lines.append(re.sub(r'^\s*\d+[\.\)]\s*', '', line))
-    
-    return "".join(cleaned_lines)
+    """Clean translation text for card display. Delegates to TextParser.clean_for_display()."""
+    return TextParser.clean_for_display(text)
 
 
 def format_analogues_html(text: str) -> str:
-    """Format analogues table from text."""
-    if not text or str(text).lower() == 'nan':
-        return ""
-    
-    # Normalize Unicode first
-    text = normalize_text(str(text))
-    
-    lines = re.split(r'\n|<br\s*/?>', text)
-    html_out = '<table class="analogues-table">'
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        
-        parts = line.split(':', 1)
-        if len(parts) == 2:
-            code = parts[0].strip()
-            word = parts[1].strip()
-            html_out += f'<tr class="ana-row"><td class="ana-lang">{code}</td><td class="ana-word">{word}</td></tr>'
-        else:
-            html_out += f'<tr class="ana-row"><td colspan="2" class="ana-word">{line}</td></tr>'
-    
-    html_out += '</table>'
-    return html_out
+    """Format analogues table from text. Delegates to TextParser.format_analogues_html()."""
+    return TextParser.format_analogues_html(text)
 
 
 def ensure_dir(path: str) -> None:

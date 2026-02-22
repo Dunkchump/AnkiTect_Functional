@@ -20,8 +20,8 @@
 
 - **Auto Month-Based Subdecks** - Creates subdecks automatically based on current month/year
 - **Main Decks** - Separate parent decks for each language:
-  - 🇩🇪 **DE Das Fundament** → 2025.12 | Dezember → Cards
-  - 🇬🇧 **GB The Cornerstone** → 2025.12 | December → Cards
+  - 🇩🇪 **Testament Deutsch** → 2026.02 | Februar → Cards
+  - 🇬🇧 **Testament English** → 2026.02 | February → Cards
 - **Zero-Config** - Subdeck names adjust each month automatically
 
 ### ⚡ **High Performance**
@@ -75,7 +75,6 @@ Optional columns add richness:
 To generate images, you need a Pollinations API key:
 
 1. **Get a Free Key:**
-
    - Visit https://enter.pollinations.ai/
    - Sign up (GitHub recommended)
    - Copy your **Secret Key** (starts with `sk_`)
@@ -99,7 +98,6 @@ To generate images, you need a Pollinations API key:
    ```
 
    ⚠️ **IMPORTANT:** Never commit Secret Keys to GitHub!
-
    - Secret Key (sk\_...): Unlimited access, keep private ✅
    - Publishable Key (pk\_...): Rate-limited, safe for public repos
 
@@ -140,7 +138,7 @@ Each language defines:
 
 ```python
 "DE": {
-    "deck_name": "DE Das Fundament",
+    "deck_name": "Testament Deutsch",
     "voice": "de-DE-ConradNeural",
     "available_voices": [
         "de-DE-ConradNeural",
@@ -171,9 +169,9 @@ Decks are named dynamically based on current date:
 
 Examples:
 
-- December 2025: `DE Das Fundament::2025.12 | Dezember`
-- January 2026: `DE Das Fundament::2026.01 | Januar`
-- February 2025: `GB The Cornerstone::2025.02 | February`
+- December 2025: `Testament Deutsch::2025.12 | Dezember`
+- January 2026: `Testament Deutsch::2026.01 | Januar`
+- February 2025: `Testament English::2025.02 | February`
 
 ---
 
@@ -183,20 +181,41 @@ Examples:
 ├── src/
 │   ├── config/           # Language & app configuration
 │   │   ├── languages.py  # Language settings + voice lists
-│   │   └── settings.py   # Global config + deck naming
+│   │   ├── settings.py   # Global config + deck naming
+│   │   ├── config_manager.py # Settings persistence (JSON)
+│   │   ├── card_sections.py  # Card section configuration
+│   │   └── card_types.py     # Card type configuration
 │   ├── deck/             # Anki deck building logic
 │   │   ├── builder.py    # Main deck generator
 │   │   └── cache.py      # Media caching system
 │   ├── fetchers/         # External data sources
 │   │   ├── audio.py      # TTS with random voice selection
-│   │   ├── images.py     # Image downloads
-│   │   └── base.py       # Base fetcher class
+│   │   ├── images.py     # Image generation via Pollinations API
+│   │   ├── base.py       # Base fetcher class
+│   │   ├── factory.py    # Fetcher factory pattern
+│   │   └── registry.py   # Fetcher registry
 │   ├── models/           # Data classes
 │   │   └── card.py       # Card structure
+│   ├── services/         # Business logic services
+│   │   ├── ai_service.py     # AI provider integrations
+│   │   ├── media_service.py  # Media fetch & cache wrapper
+│   │   ├── repository.py     # SQLite storage (future)
+│   │   └── vocabulary_service.py # Vocabulary data management
+│   ├── plugins/          # Plugin system
+│   │   └── __init__.py   # Plugin manager & discovery
 │   ├── templates/        # Anki card design
 │   │   └── __init__.py   # HTML/CSS templates
+│   ├── ui/               # Flet GUI views
+│   │   ├── dashboard.py  # Build controls & progress
+│   │   ├── workbench.py  # CSV editor & card preview
+│   │   ├── settings.py   # Settings panel
+│   │   ├── card_preview.py       # Card preview component
+│   │   ├── card_sections_editor.py # Section toggle editor
+│   │   └── card_types_editor.py   # Card type toggle editor
 │   └── utils/            # Utilities
 │       ├── helpers.py    # Helper functions
+│       ├── parsing.py    # Text parsing (canonical)
+│       ├── paths.py      # Media path generation
 │       └── logger.py     # Logging setup
 ├── data/
 │   ├── input/            # Input CSVs (optional)
@@ -261,7 +280,7 @@ To customize, edit `src/config/languages.py`:
 **Pipe-delimited** (|) with headers:
 
 ```csv
-TargetWord|Meaning|IPA|Part_of_Speech|Gender|Morphology|Nuance|ContextSentences|ContextTranslation|Etymology|Mnemonic|Analogues|Image|Tags
+TargetWord|Meaning|IPA|Part_of_Speech|Gender|Morphology|Nuance|ContextSentences|ContextTranslation|Etymology|Mnemonic|Analogues|ImagePrompt|Tags
 die Paraphilie|Paraphilia|/parafeˈliː/|Noun|die|Pl: -n|formal|1. Example<br>2. Example|1. Translation<br>2. Translation|Gk. para-+philia|Sounds like...|Analogues here|url|Noun C1 Psychology
 ```
 
@@ -279,7 +298,7 @@ die Paraphilie|Paraphilia|/parafeˈliː/|Noun|die|Pl: -n|formal|1. Example<br>2.
 - **Etymology** - Word origin/derivation
 - **Mnemonic** - Memory aid/trick
 - **Analogues** - Similar/related words
-- **Image** - URL to image (or leave empty for auto-fetch)
+- **ImagePrompt** - Prompt for AI image generation (or leave empty to skip)
 - **Tags** - Searchable tags (comma or space separated)
 
 ---
@@ -341,14 +360,18 @@ df = df[df['Tags'].str.contains('C1', na=False)]
 df = df[df['Tags'].str.contains('Business|IT', na=False)]
 ```
 
-### Disable Media Downloads
+### Configure Media Downloads
 
-In `src/config/settings.py`:
+In `settings.json`:
 
-```python
-DOWNLOAD_IMAGES = False  # Skip image downloads
-DOWNLOAD_AUDIO = False   # Skip audio generation
+```json
+{
+  "FETCH_IMAGES": true,
+  "FETCH_AUDIO": true
+}
 ```
+
+Set to `false` to skip image generation or audio synthesis.
 
 ---
 
@@ -417,8 +440,8 @@ for csv_file in os.listdir('data/input/'):
 | `pandas`   | CSV manipulation     | BSD-3      |
 | `edge-tts` | Microsoft TTS voice  | MIT        |
 | `aiohttp`  | Async HTTP requests  | Apache 2.0 |
-| `pillow`   | Image processing     | HPND       |
-| `tqdm`     | Progress bars        | MPL 2.0    |
+| `flet`     | Desktop GUI          | Apache 2.0 |
+| `aiofiles` | Async file I/O       | Apache 2.0 |
 
 Install all with:
 
@@ -459,6 +482,8 @@ See [LICENSE](LICENSE) file for details.
 **Made with ❤️ for language learners worldwide**
 
 **Questions?** Check the troubleshooting section or review `src/` code comments.
-#   S a v e - A n k i T a c k  
- #   S a v e - A n k i T a c k  
+#   S a v e - A n k i T a c k 
+ 
+ #   S a v e - A n k i T a c k 
+ 
  

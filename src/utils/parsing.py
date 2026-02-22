@@ -1,5 +1,6 @@
 """Text parsing utilities for consistent text processing across the application."""
 
+import html
 import re
 import unicodedata
 from typing import List
@@ -173,11 +174,11 @@ class TextParser:
             
             parts = line.split(':', 1)
             if len(parts) == 2:
-                code = parts[0].strip()
-                word = parts[1].strip()
+                code = html.escape(parts[0].strip())
+                word = html.escape(parts[1].strip())
                 html_out += f'<tr class="ana-row"><td class="ana-lang">{code}</td><td class="ana-word">{word}</td></tr>'
             else:
-                html_out += f'<tr class="ana-row"><td colspan="2" class="ana-word">{line}</td></tr>'
+                html_out += f'<tr class="ana-row"><td colspan="2" class="ana-word">{html.escape(line)}</td></tr>'
         
         html_out += '</table>'
         return html_out

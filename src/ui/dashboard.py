@@ -20,66 +20,8 @@ import flet as ft
 from src.config import Config
 from src.config.config_manager import SettingsManager
 from src.deck import AnkiDeckBuilder
+from src.ui.theme import DesignTokens, show_snackbar
 from src.utils.parsing import TextParser
-
-
-# =============================================================================
-# DESIGN TOKENS
-# =============================================================================
-class DesignTokens:
-    """Centralized design tokens for consistent styling."""
-    # Colors - Deep dark theme
-    BG_PRIMARY = "#121212"
-    BG_SURFACE = "#1A1A1B"
-    BG_CARD = "#242426"
-    BG_CARD_HOVER = "#2A2A2C"
-    BG_ELEVATED = "#2D2D30"
-    
-    # Text colors
-    TEXT_PRIMARY = "#FFFFFF"
-    TEXT_SECONDARY = "#B3B3B3"
-    TEXT_TERTIARY = "#808080"
-    TEXT_MUTED = "#5C5C5C"
-    
-    # Accent colors (desaturated)
-    ACCENT_PRIMARY = "#7C4DFF"  # Main CTA - slightly desaturated purple
-    ACCENT_PRIMARY_HOVER = "#9E7AFF"
-    ACCENT_SECONDARY = "#536DFE"  # Secondary actions
-    ACCENT_DANGER = "#E57373"  # Muted red for destructive actions
-    ACCENT_DANGER_HOVER = "#EF9A9A"
-    ACCENT_SUCCESS = "#81C784"  # Muted green
-    ACCENT_WARNING = "#FFB74D"  # Muted amber
-    
-    # Log colors
-    LOG_INFO = "#B3B3B3"
-    LOG_SUCCESS = "#81C784"
-    LOG_WARNING = "#FFB74D"
-    LOG_ERROR = "#E57373"
-    LOG_PROGRESS = "#9E7AFF"
-    LOG_TIMESTAMP = "#5C5C5C"
-    LOG_BG_ALT = "#1F1F21"
-    
-    # Spacing
-    SPACING_XS = 4
-    SPACING_SM = 8
-    SPACING_MD = 16
-    SPACING_LG = 24
-    SPACING_XL = 32
-    
-    # Border radius
-    RADIUS_SM = 8
-    RADIUS_MD = 12
-    RADIUS_LG = 16
-    RADIUS_XL = 20
-    
-    # Button heights
-    BUTTON_HEIGHT_SM = 36
-    BUTTON_HEIGHT_MD = 44
-    BUTTON_HEIGHT_LG = 52
-    
-    # Typography
-    FONT_MONO = "JetBrains Mono, Consolas, Monaco, monospace"
-    FONT_SANS = "Inter, Roboto, Segoe UI, sans-serif"
 
 
 class DashboardView:
@@ -194,7 +136,6 @@ class DashboardView:
         # Top section wrapper with fixed height
         top_section = ft.Container(
             content=top_grid,
-            height=380,  # Fixed height for top section
         )
         
         # Fixed Viewport Layout - NO SCROLL on main container
@@ -568,17 +509,11 @@ class DashboardView:
     def _confirm_replace(self) -> None:
         """Show confirmation dialog for replace action."""
         def do_replace(e):
-            dialog.open = False
-            self.page.update()
-            if dialog in self.page.overlay:
-                self.page.overlay.remove(dialog)
+            self.page.pop_dialog()
             self._replace_csv_text(self._paste_input.value if self._paste_input else "")
         
         def cancel(e):
-            dialog.open = False
-            self.page.update()
-            if dialog in self.page.overlay:
-                self.page.overlay.remove(dialog)
+            self.page.pop_dialog()
         
         dialog = ft.AlertDialog(
             modal=True,
@@ -600,11 +535,10 @@ class DashboardView:
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+            on_dismiss=cancel,
         )
         
-        self.page.overlay.append(dialog)
-        dialog.open = True
-        self.page.update()
+        self.page.show_dialog(dialog)
     
     def _build_log_section(self) -> ft.Container:
         """Build the live log section with improved styling."""
@@ -811,14 +745,9 @@ class DashboardView:
             from src.config.config_manager import SettingsManager
             from src.config import Config as GlobalConfig
             
-            sm = SettingsManager()
-            sm.reload()  # Force reload from disk to get latest saved settings
-            GlobalConfig.POLLINATIONS_API_KEY = sm.get("POLLINATIONS_API_KEY", "")
-            GlobalConfig.CURRENT_LANG = sm.get("CURRENT_LANG", "DE")
-            GlobalConfig.VOICE = sm.get("VOICE", "en-US-JennyNeural")
-            GlobalConfig.FETCH_IMAGES = sm.get("FETCH_IMAGES", True)
-            GlobalConfig.FETCH_AUDIO = sm.get("FETCH_AUDIO", True)
-            self._perf_mode = sm.get("PERFORMANCE_MODE", False)
+            # Single call reloads ALL config fields from SettingsManager
+            GlobalConfig.reload_from_settings()
+            self._perf_mode = SettingsManager().get("PERFORMANCE_MODE", False)
             
             # Check CSV exists
             if not os.path.exists(Config.CSV_FILE):
@@ -860,8 +789,13 @@ class DashboardView:
                 self._add_log_entry("💡 Tip: If card layout looks wrong in Anki, delete the old deck and re-import", "info")
                 self._show_success_dialog(output_path, stats)
             else:
+                error_detail = stats.get("error", "") if stats else ""
                 self._add_log_entry("Build failed!", "error")
-                self._show_error_dialog("Build Failed", "The build process did not complete successfully.")
+                if error_detail:
+                    self._add_log_entry(f"Error: {error_detail}", "error")
+                self._show_error_dialog("Build Failed", 
+                    f"The build process did not complete successfully.\n\n{error_detail}" if error_detail 
+                    else "The build process did not complete successfully.")
         
         except Exception as e:
             self._add_log_entry(f"Error: {str(e)}", "error")
@@ -870,6 +804,11 @@ class DashboardView:
         finally:
             self.is_building = False
             self._set_building_state(False)
+            # Reset progress bar after build (success or failure)
+            if self._progress_bar:
+                self._progress_bar.value = 0
+            if self._progress_text:
+                self._progress_text.value = "0%"
             self.page.update()
 
     def _run_build_sync(self, builder: AnkiDeckBuilder, csv_file: str) -> tuple:
@@ -884,8 +823,10 @@ class DashboardView:
                 f"ankitect_{Config.CURRENT_LANG.lower()}.apkg"
             )
             return True, os.path.abspath(output_path), builder.stats.get_all()
-        except Exception:
-            return False, "", {}
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return False, "", {"error": str(e)}
     
     def _enqueue_progress(self, data: Dict[str, Any]) -> None:
         """Enqueue progress updates from background thread."""
@@ -1047,12 +988,7 @@ class DashboardView:
         audio = stats.get('audio_word_success', 0)
         
         def close_dialog(e):
-            dialog.open = False
-            self.page.update()  # Force update state first
-            # Safe removal
-            if dialog in self.page.overlay:
-                self.page.overlay.remove(dialog)
-            self.page.update()
+            self.page.pop_dialog()
         
         def open_folder(e):
             folder = os.path.dirname(output_path)
@@ -1147,20 +1083,15 @@ class DashboardView:
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+            on_dismiss=close_dialog,
         )
         
-        self.page.overlay.append(dialog)
-        dialog.open = True
-        self.page.update()
+        self.page.show_dialog(dialog)
     
     def _show_error_dialog(self, title: str, message: str) -> None:
         """Show an error dialog with improved styling."""
         def close_dialog(e):
-            dialog.open = False
-            self.page.update()
-            if dialog in self.page.overlay:
-                self.page.overlay.remove(dialog)
-            self.page.update()
+            self.page.pop_dialog()
         
         dialog = ft.AlertDialog(
             modal=True,
@@ -1187,17 +1118,21 @@ class DashboardView:
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+            on_dismiss=close_dialog,
         )
         
-        self.page.overlay.append(dialog)
-        dialog.open = True
-        self.page.update()
+        self.page.show_dialog(dialog)
     
     def _on_file_picked(self, e) -> None:
         """Import CSV file by copying to project root."""
         import shutil
         
         try:
+            if not e.files or len(e.files) == 0:
+                return
+            source_path = e.files[0].path
+            if not source_path:
+                return
             # Copy file asynchronously
             self.page.run_task(self._import_csv_async, source_path)
         except Exception as e:
@@ -1209,7 +1144,7 @@ class DashboardView:
         
         try:
             # Copy file in executor to avoid blocking
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, shutil.copy, source_path, Config.CSV_FILE)
             
             # Update CSV status indicator
@@ -1257,9 +1192,11 @@ class DashboardView:
                 return
 
             write_mode = "w" if mode == "replace" else ("a" if file_exists else "w")
+            write_header = (write_mode == "w")  # Only write header for new/replaced files
             with open(csv_path, write_mode, encoding="utf-8-sig", newline="") as f:
                 writer = csv.writer(f, delimiter="|", quotechar='"', quoting=csv.QUOTE_MINIMAL)
-                writer.writerow(header)
+                if write_header:
+                    writer.writerow(header)
                 for row in normalized_rows:
                     writer.writerow(row)
 
@@ -1325,32 +1262,7 @@ class DashboardView:
     
     def _show_snackbar(self, message: str, error: bool = False, icon: str = None) -> None:
         """Show a snackbar notification with improved styling."""
-        snackbar = ft.SnackBar(
-            content=ft.Row(
-                controls=[
-                    ft.Icon(
-                        icon or (ft.Icons.ERROR_OUTLINE if error else ft.Icons.CHECK_CIRCLE_OUTLINE),
-                        color=DesignTokens.TEXT_PRIMARY,
-                        size=20,
-                    ),
-                    ft.Text(
-                        message, 
-                        color=DesignTokens.TEXT_PRIMARY,
-                        size=14,
-                    ),
-                ],
-                spacing=12,
-            ),
-            bgcolor=DesignTokens.ACCENT_DANGER if error else DesignTokens.ACCENT_SUCCESS,
-            duration=3500,
-        )
-        # Clean up old snackbars
-        for ctrl in list(self.page.overlay):
-            if isinstance(ctrl, ft.SnackBar):
-                self.page.overlay.remove(ctrl)
-        self.page.overlay.append(snackbar)
-        snackbar.open = True
-        self.page.update()
+        show_snackbar(self.page, message, error=error, icon=icon)
 
 
 def create_dashboard_view(page: ft.Page) -> ft.Container:

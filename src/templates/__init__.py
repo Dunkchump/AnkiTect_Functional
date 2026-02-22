@@ -89,24 +89,24 @@ class CardTemplates:
     .ana-lang {
         text-align: right;
         font-weight: bold;
-        color: #adb5bd;
+        color: var(--label-color);
         padding-right: 12px;
-        border-right: 2px solid #e9ecef; /* The line */
+        border-right: 2px solid var(--section-border); /* The line */
         width: 35px; /* Fixed width prevents jumping */
         white-space: nowrap;
     }
     .ana-word {
         text-align: left;
         padding-left: 12px;
-        color: #343a40;
+        color: var(--text-color);
     }
 
     .sentence-container {
         display: flex; justify-content: space-between; align-items: center;
-        background-color: #f8f9fa; border-radius: 6px;
-        padding: 6px 10px; margin-bottom: 6px; border-left: 3px solid #dee2e6;
+        background-color: var(--card-bg); border-radius: 6px;
+        padding: 6px 10px; margin-bottom: 6px; border-left: 3px solid var(--section-border);
     }
-    .sentence-text { flex-grow: 1; margin-right: 10px; font-size: 0.9em; line-height: 1.35; color: #343a40; }
+    .sentence-text { flex-grow: 1; margin-right: 10px; font-size: 0.9em; line-height: 1.35; color: var(--text-color); }
     
     .replay-btn {
         background: white; color: #495057; border: 1px solid #ced4da; 
@@ -121,7 +121,7 @@ class CardTemplates:
 
     .footer-controls { 
         display: flex; justify-content: center; align-items: center; 
-        gap: 15px; padding: 15px 20px; background: #f8f9fa; border-top: 1px solid #eee; 
+        gap: 15px; padding: 15px 20px; background: var(--card-bg); border-top: 1px solid var(--section-border); 
     }
     
     .pill-btn {
@@ -134,8 +134,8 @@ class CardTemplates:
     .pill-btn:hover { background: #f1f3f5; }
     .pill-btn:active { transform: translateY(1px); }
 
-    .tags-footer { text-align: center; padding: 10px; font-size: 0.75em; color: #ced4da; }
-    .tag-pill { display: inline-block; background: #f1f3f5; padding: 2px 8px; border-radius: 10px; margin: 0 2px; }
+    .tags-footer { text-align: center; padding: 10px; font-size: 0.75em; color: var(--label-color); }
+    .tag-pill { display: inline-block; background: var(--section-border); padding: 2px 8px; border-radius: 10px; margin: 0 2px; }
     
     .hidden-native-audio { display: none; }
     """
@@ -179,7 +179,7 @@ class CardTemplates:
         )
         return f"{vars_css}\n{cls.CSS}"
 
-    FRONT_REC = """<div class="card-container"><div style="padding:50px 20px; text-align:center;"><div style="font-size:0.85em; color:#bbb; text-transform:uppercase;">__LABEL__</div><div style="font-size:3em; font-weight:800; color:#2c3e50; margin-top:15px;">{{TargetWord}}</div><div style="color:#95a5a6; margin-top:10px; font-family:monospace;">{{Part_of_Speech}}</div></div></div>"""
+    FRONT_REC = """<div class="card-container"><div style="padding:50px 20px; text-align:center;"><div style="font-size:0.85em; color:var(--label-color); text-transform:uppercase;">__LABEL__</div><div style="font-size:3em; font-weight:800; color:var(--text-color); margin-top:15px;">{{TargetWord}}</div><div style="color:var(--label-color); margin-top:10px; font-family:monospace;">{{Part_of_Speech}}</div></div></div>"""
     
     JS_PLAYER = """
     <script>
@@ -198,7 +198,9 @@ class CardTemplates:
         audio.onended = function() { btn.innerHTML = "▶"; };
     }
     function playMainAudio() { var a = document.getElementById('main_word_audio'); if(a){a.currentTime=0; a.play();} }
-
+    </script>
+    <script src="_confetti.js"></script>
+    <script>
     try {
         var count = 200;
         var defaults = { origin: { y: 0.7 } };
@@ -211,7 +213,6 @@ class CardTemplates:
         }, 300);
     } catch (e) { console.log("Confetti err"); }
     </script>
-    <script src="_confetti.js"></script>
     """
 
     BACK_REC = """
@@ -281,7 +282,20 @@ class CardTemplates:
             <button class="pill-btn" onclick="playMainAudio()">🎧 Listen</button>
         </div>
         
-        <div class="tags-footer">{{#Tags}}<span class="tag-pill">{{Tags}}</span>{{/Tags}}</div>
+        <div class="tags-footer" id="tags-container" data-tags="{{Tags}}"></div>
+        <script>
+        (function() {
+            var el = document.getElementById('tags-container');
+            if (el) {
+                var tags = (el.getAttribute('data-tags') || '').trim();
+                if (tags) {
+                    el.innerHTML = tags.split(/\\s+/).map(function(t) {
+                        return '<span class="tag-pill">' + t + '</span>';
+                    }).join('');
+                }
+            }
+        })();
+        </script>
 
         <div class="hidden-native-audio">{{AudioWord}}</div>
         <audio id="main_word_audio" src="{{Audio_Path_Word}}" preload="auto"></audio>
@@ -289,9 +303,9 @@ class CardTemplates:
     """ + JS_PLAYER
     
     # Blue Hint Box in Production Card
-    FRONT_PROD = """<div class="card-container"><div style="padding:40px 20px; text-align:center;"><div style="font-size:0.8em; color:#bbb; text-transform:uppercase;">TRANSLATE</div><div style="font-size:1.8em; font-weight:bold; color:#2c3e50; margin-top:10px;">{{Meaning}}</div><div class="mnemonic-box" style="margin-top:20px;border-left: none">Hint: {{Mnemonic}}</div></div></div>"""
-    FRONT_LIST = """<div class="card-container"><div style="padding:50px 20px; text-align:center;"><div style="font-size:4em;">🎧</div><div style="margin-top:20px; color:#888;">Listen & Recognize</div><div style="display:none;">{{AudioWord}}</div><button class="pill-btn" style="margin-top:20px; width:150px;" onclick="document.getElementById('q_audio').play()">▶ Play</button><audio id="q_audio" src="{{Audio_Path_Word}}"></audio></div></div>"""
-    FRONT_CLOZE = r"""<div class="card-container"><div class="header-box bg-none"><div style="font-size:1.2em;">Complete the Context</div></div><div class="section" style="padding: 20px;"><div id="context-sentence" style="font-size:1.1em; line-height:1.6;">{{ContextSentences}}</div></div></div><script>var contextDiv=document.getElementById("context-sentence");if(contextDiv){var content=contextDiv.innerHTML;var re=/<b>(.*?)<\/b>/gi;contextDiv.innerHTML=content.replace(re,"<span style='color:#3498db; border-bottom:2px solid #3498db; font-weight:bold;'>[...]</span>");}</script>"""
+    FRONT_PROD = """<div class="card-container"><div style="padding:40px 20px; text-align:center;"><div style="font-size:0.8em; color:var(--label-color); text-transform:uppercase;">TRANSLATE</div><div style="font-size:1.8em; font-weight:bold; color:var(--definition-color); margin-top:10px;">{{Meaning}}</div><div class="mnemonic-box" style="margin-top:20px;border-left: none">Hint: {{Mnemonic}}</div></div></div>"""
+    FRONT_LIST = """<div class="card-container"><div style="padding:50px 20px; text-align:center;"><div style="font-size:4em;">🎧</div><div style="margin-top:20px; color:var(--label-color);">Listen & Recognize</div><div style="display:none;">{{AudioWord}}</div><button class="pill-btn" style="margin-top:20px; width:150px;" onclick="document.getElementById('q_audio').play()">▶ Play</button><audio id="q_audio" src="{{Audio_Path_Word}}"></audio></div></div>"""
+    FRONT_CLOZE = r"""<div class="card-container"><div class="header-box bg-none"><div style="font-size:1.2em;">Complete the Context</div></div><div class="section" style="padding: 20px;"><div id="context-sentence" style="font-size:1.1em; line-height:1.6; color:var(--text-color);">{{ContextSentences}}</div></div></div><script>var contextDiv=document.getElementById("context-sentence");if(contextDiv){var content=contextDiv.innerHTML;var re=/<b>(.*?)<\/b>/gi;contextDiv.innerHTML=content.replace(re,"<span style='color:var(--none-start); border-bottom:2px solid var(--none-start); font-weight:bold;'>[...]</span>");}</script>"""
     
     @classmethod
     def get_recognition_template(cls, label: str):
@@ -395,7 +409,20 @@ class CardTemplates:
         </div>"""
     
     SECTION_TAGS = """
-        <div class="tags-footer">{{#Tags}}<span class="tag-pill">{{Tags}}</span>{{/Tags}}</div>"""
+        <div class="tags-footer" id="tags-container" data-tags="{{Tags}}"></div>
+        <script>
+        (function() {
+            var el = document.getElementById('tags-container');
+            if (el) {
+                var tags = (el.getAttribute('data-tags') || '').trim();
+                if (tags) {
+                    el.innerHTML = tags.split(/\\s+/).map(function(t) {
+                        return '<span class="tag-pill">' + t + '</span>';
+                    }).join('');
+                }
+            }
+        })();
+        </script>"""
     
     # Hidden audio elements (always included at the end)
     SECTION_AUDIO_HIDDEN = """

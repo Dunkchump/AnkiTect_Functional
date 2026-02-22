@@ -124,20 +124,22 @@ class MediaPathGenerator:
         """
         Generate a unique, deterministic UUID for a card.
         
-        Uses SHA-256 hash of word + part of speech + meaning + index
+        Uses SHA-256 hash of word + part of speech + meaning
         to ensure uniqueness even for homographs (e.g., "Bank" as bench vs. institution).
+        The index parameter is kept for API compatibility but NOT included in the hash,
+        so shuffled builds produce the same UUIDs and don't create Anki duplicates.
         
         Args:
             word: Target word (normalized)
             pos: Part of speech
             meaning: Full meaning text
-            index: Row index in source data
+            index: Row index in source data (unused, kept for compatibility)
             language: Language code
             
         Returns:
             UUID string like "a1b2c3d4e5f6_DE"
         """
-        unique_string = f"{word}|{pos}|{meaning}|{index}"
+        unique_string = f"{word}|{pos}|{meaning}"
         base_hash = hashlib.sha256(unique_string.encode()).hexdigest()[:32]
         return f"{base_hash}_{language}"
     

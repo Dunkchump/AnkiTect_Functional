@@ -6,6 +6,7 @@ import random
 import uuid
 from typing import Optional, Callable
 
+import aiohttp
 import edge_tts
 
 from ..config import Config
@@ -100,19 +101,25 @@ class AudioFetcher(BaseFetcher):
             else:
                 return False
             
-        except Exception as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError) as e:
+            # Transient network errors — will be retried by caller
             error_msg = str(e)
-            
-            # Check for rate limiting errors (HTTP 429)
             if "429" in error_msg or "Too Many Requests" in error_msg:
                 print(f"Rate limit hit (429): {error_msg[:50]}")
                 if self.concurrency_callback:
                     self.concurrency_callback(status_code=429, is_success=False)
             else:
-                print(f"Error generating audio: {error_msg[:50]}")
+                print(f"Network error generating audio: {error_msg[:50]}")
                 if self.concurrency_callback:
                     self.concurrency_callback(is_success=False)
-            
+            return False
+
+        except Exception as e:
+            # Permanent errors (bad config, invalid input) — log and fail
+            error_msg = str(e)
+            print(f"Error generating audio: {error_msg[:80]}")
+            if self.concurrency_callback:
+                self.concurrency_callback(is_success=False)
             return False
         
         finally:
