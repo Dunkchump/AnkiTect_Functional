@@ -2,14 +2,14 @@
 Card Sections Editor UI Component
 ----------------------------------
 
-Provides a UI for configuring which card sections are visible
-and their display order through drag-and-drop or arrow buttons.
+Provides a compact UI for configuring which card sections are visible
+and their display order. Auto-saves on every change.
 """
 
 import flet as ft
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
-from .theme import show_snackbar
+from .theme import DesignTokens
 from ..config import (
     SettingsManager,
     CARD_SECTIONS,
@@ -21,226 +21,190 @@ from ..config import (
 
 class CardSectionsEditor:
     """
-    UI component for editing card sections configuration.
-    
-    Allows users to:
-    - Enable/disable individual sections
-    - Reorder sections using up/down buttons
-    - Preview the effect on card layout
-    - Save configuration to settings
+    Compact card-layout editor: toggle sections, reorder, apply presets.
+    Auto-persists every change and fires *on_save* so the host can
+    refresh the preview.
     """
-    
+
     def __init__(
-        self, 
+        self,
         page: ft.Page,
-        on_change: Optional[Callable[[Dict[str, bool], List[str]], None]] = None,
+        settings: SettingsManager,
         on_save: Optional[Callable[[], None]] = None,
     ) -> None:
-        """
-        Initialize the sections editor.
-        
-        Args:
-            page: Flet page instance
-            on_change: Callback when sections change (enabled, order)
-            on_save: Callback when settings are saved
-        """
         self.page = page
-        self.settings = SettingsManager()
-        self._on_change = on_change
+        self._settings = settings
         self._on_save = on_save
-        
-        # Load current configuration
-        self._sections_enabled: Dict[str, bool] = self.settings.get(
-            "CARD_SECTIONS_ENABLED", 
-            get_default_enabled()
+
+        # Load & validate
+        self._sections_enabled: Dict[str, bool] = self._settings.get(
+            "CARD_SECTIONS_ENABLED", get_default_enabled()
         )
-        self._sections_order: List[str] = self.settings.get(
-            "CARD_SECTIONS_ORDER",
-            get_default_order()
+        self._sections_order: List[str] = self._settings.get(
+            "CARD_SECTIONS_ORDER", get_default_order()
         )
-        
-        # Validate loaded config
         self._sections_enabled, self._sections_order = validate_sections_config(
-            self._sections_enabled,
-            self._sections_order
+            self._sections_enabled, self._sections_order
         )
-        
-        # Track changes
-        self._has_changes: bool = False
-        
-        # UI references
-        self._section_list: Optional[ft.Column] = None
-        self._save_button: Optional[ft.ElevatedButton] = None
-        self._container: Optional[ft.Container] = None
-        
-        # Build the view
-        self._build_view()
-    
-    @property
-    def container(self) -> ft.Container:
-        """Get the main container for this component."""
-        return self._container
-    
-    @property
-    def sections_enabled(self) -> Dict[str, bool]:
-        """Get current enabled state of sections."""
-        return self._sections_enabled.copy()
-    
-    @property
-    def sections_order(self) -> List[str]:
-        """Get current order of sections."""
-        return self._sections_order.copy()
-    
-    def _build_view(self) -> None:
-        """Build the complete editor view."""
-        # Section list
-        self._section_list = ft.Column(
+
+        # UI refs filled by build()
+        self._sections_list: Optional[ft.Column] = None
+        self._status_text: Optional[ft.Text] = None
+        self._summary_chip: Optional[ft.Container] = None
+
+    # ------------------------------------------------------------------
+    # Public
+    # ------------------------------------------------------------------
+
+    def build(self) -> ft.Container:
+        """Return the ready-to-use container."""
+        self._sections_list = ft.Column(
             controls=self._build_section_items(),
-            spacing=4,
-            scroll=ft.ScrollMode.AUTO,
+            spacing=6,
         )
-        
-        # Save button
-        self._save_button = ft.ElevatedButton(
+
+        self._status_text = ft.Text(
+            "Saved", size=10, color=DesignTokens.TEXT_TERTIARY,
+        )
+
+        enabled_count = sum(1 for v in self._sections_enabled.values() if v)
+        total_count = len(self._sections_order)
+        self._summary_chip = ft.Container(
+            content=ft.Text(
+                f"{enabled_count}/{total_count} enabled",
+                size=10,
+                color=DesignTokens.TEXT_SECONDARY,
+            ),
+            padding=ft.Padding.symmetric(horizontal=8, vertical=4),
+            border_radius=12,
+            bgcolor=ft.Colors.with_opacity(0.08, DesignTokens.TEXT_PRIMARY),
+        )
+
+        reset_btn = ft.TextButton(
             content=ft.Row(
                 controls=[
-                    ft.Icon(ft.Icons.SAVE_ROUNDED, size=18),
-                    ft.Text("Save Layout", size=14, weight=ft.FontWeight.W_500),
-                ],
-                spacing=6,
-                alignment=ft.MainAxisAlignment.CENTER,
-            ),
-            style=ft.ButtonStyle(
-                color={
-                    ft.ControlState.DEFAULT: ft.Colors.WHITE,
-                    ft.ControlState.DISABLED: ft.Colors.WHITE38,
-                },
-                bgcolor={
-                    ft.ControlState.DEFAULT: ft.Colors.TEAL_700,
-                    ft.ControlState.HOVERED: ft.Colors.TEAL_600,
-                    ft.ControlState.DISABLED: ft.Colors.with_opacity(0.3, ft.Colors.TEAL_700),
-                },
-                padding=ft.Padding.symmetric(horizontal=20, vertical=12),
-                shape=ft.RoundedRectangleBorder(radius=8),
-            ),
-            on_click=self._on_save_click,
-        )
-        
-        # Reset button
-        reset_button = ft.TextButton(
-            content=ft.Row(
-                controls=[
-                    ft.Icon(ft.Icons.RESTORE, size=16, color=ft.Colors.WHITE54),
-                    ft.Text("Reset to Default", size=12, color=ft.Colors.WHITE54),
+                    ft.Icon(ft.Icons.RESTORE, size=14, color=DesignTokens.ACCENT_TEAL),
+                    ft.Text("Reset Order", size=11, color=DesignTokens.ACCENT_TEAL),
                 ],
                 spacing=4,
             ),
             on_click=self._on_reset_click,
         )
-        
-        # Header
-        header = ft.Container(
-            content=ft.Row(
+
+        preset_min = self._preset_button("Minimal", ft.Icons.TUNE, self._on_preset_minimal)
+        preset_full = self._preset_button("Full", ft.Icons.DASHBOARD, self._on_preset_full)
+
+        return ft.Container(
+            content=ft.Column(
                 controls=[
-                    ft.Icon(ft.Icons.VIEW_AGENDA_ROUNDED, size=24, color=ft.Colors.TEAL_200),
-                    ft.Column(
+                    # Header row
+                    ft.Row(
                         controls=[
                             ft.Text(
                                 "Card Layout",
-                                size=18,
-                                weight=ft.FontWeight.BOLD,
-                                color=ft.Colors.WHITE,
+                                size=14,
+                                weight=ft.FontWeight.W_600,
+                                color=DesignTokens.TEXT_PRIMARY,
                             ),
+                            ft.Container(expand=True),
+                            self._summary_chip,
+                            ft.Container(width=6),
+                            self._status_text,
+                            reset_btn,
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Container(height=6),
+                    # Instructions
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.INFO_OUTLINE, size=12, color=DesignTokens.ACCENT_WARNING),
                             ft.Text(
-                                "Enable/disable sections and reorder them",
-                                size=12,
-                                color=ft.Colors.WHITE54,
+                                "Required sections cannot be disabled. Use arrows to reorder.",
+                                size=10,
+                                color=DesignTokens.ACCENT_WARNING,
                             ),
                         ],
-                        spacing=2,
+                        spacing=6,
                     ),
-                ],
-                spacing=12,
-            ),
-            padding=ft.Padding.only(bottom=15),
-        )
-        
-        # Instructions
-        instructions = ft.Container(
-            content=ft.Row(
-                controls=[
-                    ft.Icon(ft.Icons.INFO_OUTLINE, size=14, color=ft.Colors.AMBER_200),
-                    ft.Text(
-                        "Required sections cannot be disabled. Use arrows to reorder.",
-                        size=11,
-                        color=ft.Colors.AMBER_200,
+                    ft.Container(height=4),
+                    # Presets
+                    ft.Row(
+                        controls=[
+                            ft.Text("Presets", size=11, color=DesignTokens.TEXT_SECONDARY),
+                            preset_min,
+                            preset_full,
+                        ],
+                        spacing=6,
+                    ),
+                    ft.Container(height=8),
+                    # Section list
+                    ft.Container(
+                        content=self._sections_list,
+                        bgcolor=ft.Colors.with_opacity(0.03, DesignTokens.TEXT_PRIMARY),
+                        border_radius=8,
+                        padding=8,
                     ),
                 ],
                 spacing=6,
             ),
-            padding=ft.Padding.only(bottom=10),
+            padding=10,
+            border_radius=10,
+            bgcolor=ft.Colors.with_opacity(0.02, DesignTokens.TEXT_PRIMARY),
         )
-        
-        # Main content
-        content = ft.Column(
-            controls=[
-                header,
-                instructions,
-                ft.Container(
-                    content=self._section_list,
-                    bgcolor=ft.Colors.with_opacity(0.03, ft.Colors.WHITE),
-                    border_radius=10,
-                    padding=10,
-                    expand=True,
-                ),
-                ft.Container(height=15),
-                ft.Row(
-                    controls=[
-                        reset_button,
-                        ft.Container(expand=True),
-                        self._save_button,
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                ),
-            ],
-            expand=True,
+
+    @property
+    def sections_enabled(self) -> Dict[str, bool]:
+        return self._sections_enabled.copy()
+
+    @property
+    def sections_order(self) -> List[str]:
+        return self._sections_order.copy()
+
+    # ------------------------------------------------------------------
+    # Internal – build helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _preset_button(label: str, icon: str, on_click) -> ft.OutlinedButton:
+        return ft.OutlinedButton(
+            content=ft.Row(
+                controls=[
+                    ft.Icon(icon, size=14, color=DesignTokens.TEXT_SECONDARY),
+                    ft.Text(label, size=12, color=DesignTokens.TEXT_SECONDARY),
+                ],
+                spacing=6,
+            ),
+            height=28,
+            style=ft.ButtonStyle(
+                color={ft.ControlState.DEFAULT: DesignTokens.TEXT_SECONDARY},
+                bgcolor={ft.ControlState.DEFAULT: ft.Colors.with_opacity(0.02, DesignTokens.TEXT_PRIMARY)},
+                side={ft.ControlState.DEFAULT: ft.BorderSide(1, DesignTokens.BORDER_SUBTLE)},
+                padding=ft.Padding.symmetric(horizontal=10, vertical=0),
+            ),
+            on_click=on_click,
         )
-        
-        self._container = ft.Container(
-            content=content,
-            padding=20,
-            border_radius=12,
-            bgcolor="#1A1A1A",
-            expand=True,
-        )
-    
+
     def _build_section_items(self) -> List[ft.Control]:
-        """Build list of section item controls."""
         items = []
-        
         for idx, section_id in enumerate(self._sections_order):
             section = CARD_SECTIONS.get(section_id)
             if not section:
                 continue
-            
-            is_enabled = self._sections_enabled.get(section_id, True)
-            is_first = idx == 0
-            is_last = idx == len(self._sections_order) - 1
-            
-            item = self._build_section_item(
-                section_id=section_id,
-                name=section.name,
-                icon=section.icon,
-                description=section.description,
-                required=section.required,
-                enabled=is_enabled,
-                is_first=is_first,
-                is_last=is_last,
+            items.append(
+                self._build_section_item(
+                    section_id=section_id,
+                    name=section.name,
+                    icon=section.icon,
+                    description=section.description,
+                    required=section.required,
+                    enabled=self._sections_enabled.get(section_id, True),
+                    is_first=(idx == 0),
+                    is_last=(idx == len(self._sections_order) - 1),
+                )
             )
-            items.append(item)
-        
         return items
-    
+
     def _build_section_item(
         self,
         section_id: str,
@@ -252,186 +216,146 @@ class CardSectionsEditor:
         is_first: bool,
         is_last: bool,
     ) -> ft.Container:
-        """Build a single section item control."""
-        # Checkbox for enabling/disabling
-        checkbox = ft.Checkbox(
+        toggle = ft.Switch(
             value=enabled,
             disabled=required,
             on_change=lambda e, sid=section_id: self._on_toggle_section(sid, e.control.value),
-            active_color=ft.Colors.TEAL_400,
-            check_color=ft.Colors.WHITE,
+            active_color=DesignTokens.ACCENT_TEAL_LIGHT,
         )
-        
-        # Up button
+
         up_btn = ft.IconButton(
             icon=ft.Icons.KEYBOARD_ARROW_UP,
-            icon_size=18,
-            icon_color=ft.Colors.WHITE54 if not is_first else ft.Colors.WHITE12,
+            icon_size=16,
+            icon_color=DesignTokens.TEXT_SECONDARY if not is_first else DesignTokens.BORDER_SUBTLE,
             disabled=is_first,
             on_click=lambda e, sid=section_id: self._on_move_section(sid, -1),
             tooltip="Move up",
-            style=ft.ButtonStyle(
-                padding=ft.Padding.all(4),
-            ),
+            style=ft.ButtonStyle(padding=ft.Padding.all(2)),
         )
-        
-        # Down button
+
         down_btn = ft.IconButton(
             icon=ft.Icons.KEYBOARD_ARROW_DOWN,
-            icon_size=18,
-            icon_color=ft.Colors.WHITE54 if not is_last else ft.Colors.WHITE12,
+            icon_size=16,
+            icon_color=DesignTokens.TEXT_SECONDARY if not is_last else DesignTokens.BORDER_SUBTLE,
             disabled=is_last,
             on_click=lambda e, sid=section_id: self._on_move_section(sid, 1),
             tooltip="Move down",
-            style=ft.ButtonStyle(
-                padding=ft.Padding.all(4),
-            ),
+            style=ft.ButtonStyle(padding=ft.Padding.all(2)),
         )
-        
-        # Required badge
+
         required_badge = ft.Container(
-            content=ft.Text("Required", size=9, color=ft.Colors.AMBER_200),
+            content=ft.Text("Required", size=8, color=DesignTokens.ACCENT_WARNING),
             bgcolor=ft.Colors.with_opacity(0.2, ft.Colors.AMBER),
-            padding=ft.Padding.symmetric(horizontal=6, vertical=2),
-            border_radius=4,
+            padding=ft.Padding.symmetric(horizontal=5, vertical=1),
+            border_radius=3,
             visible=required,
         )
-        
-        # Section info
-        section_info = ft.Column(
+
+        title_row = ft.Row(
             controls=[
-                ft.Row(
-                    controls=[
-                        ft.Text(f"{icon} {name}", size=13, weight=ft.FontWeight.W_500,
-                               color=ft.Colors.WHITE if enabled else ft.Colors.WHITE38),
-                        required_badge,
-                    ],
-                    spacing=8,
-                ),
                 ft.Text(
-                    description,
-                    size=10,
-                    color=ft.Colors.WHITE38 if enabled else ft.Colors.WHITE12,
+                    f"{icon} {name}",
+                    size=12,
+                    weight=ft.FontWeight.W_500,
+                    color=DesignTokens.TEXT_PRIMARY if enabled else DesignTokens.TEXT_TERTIARY,
                 ),
+                required_badge,
             ],
+            spacing=6,
+        )
+        desc_text = ft.Text(
+            description,
+            size=10,
+            color=DesignTokens.TEXT_TERTIARY if enabled else DesignTokens.TEXT_MUTED,
+        )
+        section_info = ft.Column(
+            controls=[title_row, desc_text],
             spacing=2,
             expand=True,
         )
-        
+
         return ft.Container(
             content=ft.Row(
-                controls=[
-                    checkbox,
-                    section_info,
-                    up_btn,
-                    down_btn,
-                ],
-                spacing=8,
+                controls=[toggle, section_info, up_btn, down_btn],
+                spacing=6,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=ft.Padding.symmetric(horizontal=10, vertical=6),
             border_radius=8,
-            bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE) if enabled else ft.Colors.TRANSPARENT,
-            animate=ft.Animation(200, ft.AnimationCurve.EASE_OUT),
+            bgcolor=(
+                ft.Colors.with_opacity(0.06, DesignTokens.TEXT_PRIMARY)
+                if enabled
+                else ft.Colors.with_opacity(0.02, DesignTokens.TEXT_PRIMARY)
+            ),
+            border=ft.border.all(1, DesignTokens.BORDER_DIM),
         )
-    
-    def _refresh_list(self) -> None:
-        """Refresh the section list UI."""
-        if self._section_list:
-            self._section_list.controls = self._build_section_items()
-            self.page.update()
-        
-        # Notify change callback
-        if self._on_change:
-            self._on_change(self._sections_enabled, self._sections_order)
-    
-    def _mark_changed(self) -> None:
-        """Mark that changes have been made."""
-        self._has_changes = True
-    
+
+    # ------------------------------------------------------------------
+    # Internal – state mutations (auto-save)
+    # ------------------------------------------------------------------
+
+    def _refresh_and_persist(self) -> None:
+        """Rebuild list, persist to settings, refresh preview."""
+        validated_enabled, validated_order = validate_sections_config(
+            self._sections_enabled, self._sections_order
+        )
+        self._sections_enabled = validated_enabled
+        self._sections_order = validated_order
+
+        self._settings.set("CARD_SECTIONS_ENABLED", validated_enabled)
+        self._settings.set("CARD_SECTIONS_ORDER", validated_order)
+
+        if self._sections_list:
+            self._sections_list.controls = self._build_section_items()
+
+        # Update summary chip
+        if self._summary_chip and self._summary_chip.content:
+            enabled_count = sum(1 for v in self._sections_enabled.values() if v)
+            total_count = len(self._sections_order)
+            self._summary_chip.content.value = f"{enabled_count}/{total_count} enabled"
+
+        if self._status_text:
+            self._status_text.value = "Saved"
+            self._status_text.color = DesignTokens.TEXT_TERTIARY
+
+        self.page.update()
+
+        if self._on_save:
+            self._on_save()
+
     def _on_toggle_section(self, section_id: str, enabled: bool) -> None:
-        """Handle section toggle."""
         section = CARD_SECTIONS.get(section_id)
         if section and section.required:
-            return  # Cannot disable required sections
-        
+            return
         self._sections_enabled[section_id] = enabled
-        self._mark_changed()
-        self._refresh_list()
-    
+        self._refresh_and_persist()
+
     def _on_move_section(self, section_id: str, direction: int) -> None:
-        """
-        Handle section move.
-        
-        Args:
-            section_id: The section to move
-            direction: -1 for up, +1 for down
-        """
         try:
-            current_idx = self._sections_order.index(section_id)
-            new_idx = current_idx + direction
-            
+            idx = self._sections_order.index(section_id)
+            new_idx = idx + direction
             if 0 <= new_idx < len(self._sections_order):
-                # Swap positions
-                self._sections_order[current_idx], self._sections_order[new_idx] = \
-                    self._sections_order[new_idx], self._sections_order[current_idx]
-                
-                self._mark_changed()
-                self._refresh_list()
+                self._sections_order[idx], self._sections_order[new_idx] = (
+                    self._sections_order[new_idx],
+                    self._sections_order[idx],
+                )
+                self._refresh_and_persist()
         except ValueError:
-            pass  # Section not found
-    
-    def _on_save_click(self, e: ft.ControlEvent) -> None:
-        """Handle save button click."""
-        try:
-            # Validate before saving
-            validated_enabled, validated_order = validate_sections_config(
-                self._sections_enabled,
-                self._sections_order
-            )
-            
-            # Save to settings
-            self.settings.set("CARD_SECTIONS_ENABLED", validated_enabled)
-            self.settings.set("CARD_SECTIONS_ORDER", validated_order)
-            
-            self._has_changes = False
-            self._show_snackbar("Card layout saved successfully!")
-            
-            # Notify save callback
-            if self._on_save:
-                self._on_save()
-                
-        except Exception as ex:
-            self._show_snackbar(f"Error saving: {str(ex)}", error=True)
-    
+            pass
+
     def _on_reset_click(self, e: ft.ControlEvent) -> None:
-        """Handle reset button click."""
         self._sections_enabled = get_default_enabled()
         self._sections_order = get_default_order()
-        self._mark_changed()
-        self._refresh_list()
-        self._show_snackbar("Reset to default layout")
-    
-    def _show_snackbar(self, message: str, error: bool = False) -> None:
-        """Show a snackbar notification."""
-        show_snackbar(self.page, message, error=error)
+        self._refresh_and_persist()
 
+    def _on_preset_minimal(self, e: ft.ControlEvent) -> None:
+        for sid, sec in CARD_SECTIONS.items():
+            self._sections_enabled[sid] = sec.required
+        self._sections_order = get_default_order()
+        self._refresh_and_persist()
 
-def create_card_sections_editor(
-    page: ft.Page,
-    on_change: Optional[Callable[[Dict[str, bool], List[str]], None]] = None,
-    on_save: Optional[Callable[[], None]] = None,
-) -> ft.Container:
-    """
-    Factory function to create the card sections editor.
-    
-    Args:
-        page: Flet page instance
-        on_change: Optional callback for changes
-        on_save: Optional callback for save
-        
-    Returns:
-        Container with the sections editor
-    """
-    editor = CardSectionsEditor(page, on_change, on_save)
-    return editor.container
+    def _on_preset_full(self, e: ft.ControlEvent) -> None:
+        for sid in CARD_SECTIONS:
+            self._sections_enabled[sid] = True
+        self._sections_order = get_default_order()
+        self._refresh_and_persist()

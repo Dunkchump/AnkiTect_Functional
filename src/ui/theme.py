@@ -27,6 +27,21 @@ class DesignTokens:
     ACCENT_DANGER_HOVER = "#EF9A9A"
     ACCENT_SUCCESS = "#81C784"
     ACCENT_WARNING = "#FFB74D"
+    ACCENT_TEAL = "#14B8A6"
+    ACCENT_TEAL_LIGHT = "#5EEAD4"
+
+    # Borders / Dividers
+    BORDER_SUBTLE = "#2A2A2C"
+    BORDER_DIM = "#FFFFFF1A"        # white 10%
+    BORDER_LIGHT = "#FFFFFF3D"      # white 24%
+
+    # Surface overlays
+    SURFACE_OVERLAY_2 = "#FFFFFF05"   # white 2%
+    SURFACE_OVERLAY_3 = "#FFFFFF08"   # white 3%
+    SURFACE_OVERLAY_5 = "#FFFFFF0D"   # white 5%
+    SURFACE_OVERLAY_6 = "#FFFFFF0F"   # white 6%
+    SURFACE_OVERLAY_8 = "#FFFFFF14"   # white 8%
+    SURFACE_OVERLAY_12 = "#FFFFFF1F"  # white 12%
 
     # Log colors
     LOG_INFO = "#B3B3B3"

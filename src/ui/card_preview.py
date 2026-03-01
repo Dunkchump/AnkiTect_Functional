@@ -127,7 +127,6 @@ class CardPreviewRenderer:
         """
         # Load sections config from settings if not provided
         settings = SettingsManager()
-        settings.reload()  # Ensure fresh data from disk
         if sections_enabled is None or sections_order is None:
             sections_enabled = sections_enabled or settings.get(
                 "CARD_SECTIONS_ENABLED", 
@@ -262,10 +261,87 @@ class CardPreviewView:
         
         return self._view
     
+    # ── HTML → Flet rich-text helpers ──────────────────────────────────
+    _HTML_TAG_RE = re.compile(r'<(/?)([a-zA-Z][a-zA-Z0-9]*)(?:\s[^>]*)?>') 
+
+    @staticmethod
+    def _strip_to_plain(text: str) -> str:
+        """Convert HTML to plain text: <br> → \n, strip other tags."""
+        if not text:
+            return ""
+        t = str(text)
+        t = re.sub(r'<br\s*/?>', '\n', t, flags=re.IGNORECASE)
+        t = re.sub(r'<[^>]+>', '', t)
+        return t.strip()
+
+    def _html_to_spans(
+        self,
+        text: str,
+        base_size: int = 12,
+        base_color: str = "#333333",
+        base_italic: bool = False,
+    ) -> ft.Text:
+        """
+        Parse simple HTML (<b>, <i>, <br>) into an ft.Text with TextSpans.
+        Returns a ready-to-use ft.Text control.
+        """
+        if not text:
+            return ft.Text("", size=base_size, color=base_color)
+
+        raw = str(text)
+        # Normalise <br> variants to \n
+        raw = re.sub(r'<br\s*/?>', '\n', raw, flags=re.IGNORECASE)
+
+        spans: list[ft.TextSpan] = []
+        bold = False
+        italic = base_italic
+        pos = 0
+
+        for m in self._HTML_TAG_RE.finditer(raw):
+            # Flush text before this tag
+            if m.start() > pos:
+                chunk = raw[pos:m.start()]
+                if chunk:
+                    spans.append(ft.TextSpan(
+                        text=chunk,
+                        style=ft.TextStyle(
+                            size=base_size,
+                            color=base_color,
+                            weight=ft.FontWeight.BOLD if bold else None,
+                            italic=italic,
+                        ),
+                    ))
+            pos = m.end()
+            closing = m.group(1) == '/'
+            tag = m.group(2).lower()
+            if tag == 'b' or tag == 'strong':
+                bold = not closing
+            elif tag == 'i' or tag == 'em':
+                italic = (not closing) or base_italic
+            # Other tags are silently consumed
+
+        # Remaining text after the last tag
+        if pos < len(raw):
+            chunk = raw[pos:]
+            if chunk:
+                spans.append(ft.TextSpan(
+                    text=chunk,
+                    style=ft.TextStyle(
+                        size=base_size,
+                        color=base_color,
+                        weight=ft.FontWeight.BOLD if bold else None,
+                        italic=italic,
+                    ),
+                ))
+
+        if not spans:
+            return ft.Text("", size=base_size, color=base_color)
+
+        return ft.Text(spans=spans, size=base_size, no_wrap=False)
+
     def _get_style_config(self) -> Dict[str, str]:
-        """Get the current style config for preview rendering."""
+        """Get the current style config for preview rendering (cached, no disk I/O)."""
         settings = SettingsManager()
-        settings.reload()  # Ensure fresh data from disk
         style = settings.get("CARD_STYLE", CardTemplates.DEFAULT_STYLE)
         return CardTemplates.normalize_style(style)
 
@@ -370,6 +446,14 @@ class CardPreviewView:
         
         if card_type == "Production":
             # Production: Show meaning + hint
+            # CSS: .mnemonic-box { background-color: #e7f5ff; color: #1971c2;
+            #   padding: 12px; border-radius: 8px }
+            hint_box = ft.Container(
+                content=ft.Text(f"Hint: {mnemonic}", size=12, color="#1971c2"),
+                bgcolor="#e7f5ff",
+                padding=12,
+                border_radius=8,
+            ) if mnemonic else ft.Container()
             return ft.Container(
                 content=ft.Column(
                     controls=[
@@ -379,12 +463,7 @@ class CardPreviewView:
                         ft.Text(meaning, size=18, color=definition_color, 
                                weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
                         ft.Container(height=15),
-                        ft.Container(
-                            content=ft.Text(f"💡 {mnemonic}", size=12, color=text_color),
-                            bgcolor=style.get("card_bg", "#1e1e2e"),
-                            padding=10,
-                            border_radius=8,
-                        ) if mnemonic else ft.Container(),
+                        hint_box,
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     alignment=ft.MainAxisAlignment.CENTER,
@@ -419,29 +498,41 @@ class CardPreviewView:
         
         elif card_type == "Cloze":
             context = data.get("ContextSentences", "").split("<br>")[0] if data.get("ContextSentences") else ""
-            # Replace <b>word</b> with [...]
+            # Replace <b>word</b> with [...] styled like CSS
             context_cloze = re.sub(r'<b>.*?</b>', '[...]', context)
+            # The header uses bg-none gradient
+            none_start = style.get("none_start", "#8e44ad")
+            none_end = style.get("none_end", "#9b59b6")
             return ft.Container(
                 content=ft.Column(
                     controls=[
-                        ft.Text("Complete the Context", size=14, color=text_color,
-                               weight=ft.FontWeight.BOLD),
-                        ft.Container(height=15),
+                        # Header with gradient like .header-box .bg-none
+                        ft.Container(
+                            content=ft.Text("Complete the Context", size=14,
+                                           color=style.get("header_text", "#ffffff"),
+                                           weight=ft.FontWeight.BOLD,
+                                           text_align=ft.TextAlign.CENTER),
+                            gradient=ft.LinearGradient(
+                                begin=ft.Alignment.TOP_LEFT,
+                                end=ft.Alignment.BOTTOM_RIGHT,
+                                colors=[none_start, none_end],
+                            ),
+                            padding=20,
+                            border_radius=ft.border_radius.only(
+                                top_left=radius, top_right=radius),
+                        ),
                         ft.Container(
                             content=ft.Text(context_cloze or "No context available", 
                                           size=14, color=text_color),
-                            bgcolor=style.get("card_bg", "#1e1e2e"),
-                            padding=15,
-                            border_radius=8,
+                            padding=20,
                         ),
                     ],
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    alignment=ft.MainAxisAlignment.CENTER,
+                    spacing=0,
                 ),
-                padding=20,
                 bgcolor=container_bg,
                 border_radius=radius,
                 expand=True,
+                clip_behavior=ft.ClipBehavior.HARD_EDGE,
             )
         
         else:
@@ -469,7 +560,7 @@ class CardPreviewView:
     
     def _render_back_preview(self, data: Dict[str, Any], style: Dict[str, str]) -> ft.Control:
         """Render back side of card (full answer) respecting sections config."""
-        # Load sections configuration
+        # Load sections configuration (in-memory, no disk I/O)
         settings = SettingsManager()
         sections_enabled = settings.get("CARD_SECTIONS_ENABLED", get_default_enabled())
         sections_order = settings.get("CARD_SECTIONS_ORDER", get_default_order())
@@ -509,7 +600,7 @@ class CardPreviewView:
             "header": lambda: self._build_header_section(target_word, ipa, pos, header_gradient, style),
             "meaning": lambda: self._full_width_section(
                 "MEANING",
-                ft.Text(meaning, size=14, weight=ft.FontWeight.W_600, color=style.get("definition_color", "#ffffff")),
+                self._html_to_spans(meaning, base_size=14, base_color=style.get("definition_color", "#ffffff")),
                 style,
             ) if meaning else None,
             "morphology": lambda: self._build_morphology_section(
@@ -522,12 +613,20 @@ class CardPreviewView:
             "context": lambda: self._build_context_section(nuance, sentence_list, translation, style),
             "mnemonic": lambda: self._full_width_section(
                 "MEMORY HOOK",
-                ft.Text(f"💡 {mnemonic}", size=12, color=style.get("text_color", "#ffffff"), no_wrap=False),
+                # CSS: .mnemonic-box { background-color: #e7f5ff; color: #1971c2;
+                #   padding: 12px; border-radius: 8px; border-left: 4px solid #1971c2 }
+                ft.Container(
+                    content=self._html_to_spans(f"💡 {mnemonic}", base_size=12, base_color="#1971c2"),
+                    bgcolor="#e7f5ff",
+                    padding=12,
+                    border_radius=8,
+                    border=ft.border.only(left=ft.BorderSide(4, "#1971c2")),
+                ),
                 style,
             ) if mnemonic else None,
             "analogues": lambda: self._full_width_section(
                 "ANALOGUES",
-                ft.Text(analogues, size=12, color=style.get("text_color", "#ffffff")),
+                self._html_to_spans(analogues, base_size=12, base_color=style.get("text_color", "#ffffff")),
                 style,
             ) if analogues else None,
             "image": lambda: self._build_image_section(style),
@@ -619,21 +718,26 @@ class CardPreviewView:
                 )
             )
         if morphology:
+            # CSS: .morph-pill { background: #e9ecef; color: #495057; font-weight: bold }
             morph_content.append(
                 ft.Container(
-                    content=ft.Text(morphology, size=10, color=style.get("text_color", "#ffffff")),
-                    bgcolor=style.get("card_bg", "#1e1e2e"),
+                    content=ft.Text(morphology, size=10, color="#495057",
+                                   weight=ft.FontWeight.BOLD),
+                    bgcolor="#e9ecef",
                     padding=ft.Padding.symmetric(horizontal=8, vertical=3),
                     border_radius=6,
                 )
             )
         
         ety_row = ft.Row(controls=morph_content, spacing=5, wrap=True)
+        # CSS: .narrative { font-style: italic; color: #555; background: #fff9db;
+        #   padding: 12px; border-radius: 8px; border-left: 4px solid #f1c40f }
         ety_text = ft.Container(
-            content=ft.Text(etymology, size=12, color=style.get("text_color", "#ffffff"), italic=True),
-            bgcolor=style.get("card_bg", "#1e1e2e"),
-            padding=10,
+            content=self._html_to_spans(etymology, base_size=12, base_color="#555555", base_italic=True),
+            bgcolor="#fff9db",
+            padding=12,
             border_radius=8,
+            border=ft.border.only(left=ft.BorderSide(4, "#f1c40f")),
             margin=ft.Margin.only(top=10),
             expand=True,
         ) if etymology else ft.Container()
@@ -657,14 +761,17 @@ class CardPreviewView:
         
         context_controls = []
         if nuance:
-            context_controls.append(ft.Text(nuance, size=12, color=style.get("label_color", "#9aa0a6")))
+            # CSS: .nuance-sub { color: #666; font-weight: 500; font-size: 0.95em }
+            context_controls.append(self._html_to_spans(nuance, base_size=12, base_color="#666666"))
         
         for sent in sentence_list[:3]:
+            sent_text = self._html_to_spans(sent, base_size=12, base_color=style.get("text_color", "#ffffff"))
+            sent_text.expand = True
             context_controls.append(
                 ft.Container(
                     content=ft.Row(
                         controls=[
-                            ft.Text(sent, size=12, color=style.get("text_color", "#ffffff"), expand=True),
+                            sent_text,
                             ft.IconButton(ft.Icons.PLAY_CIRCLE_OUTLINE, 
                                         icon_size=18, disabled=True),
                         ],
@@ -679,9 +786,10 @@ class CardPreviewView:
             )
         
         if translation:
-            context_controls.append(
-                ft.Text(translation, size=11, color=style.get("label_color", "#9aa0a6"), italic=True)
-            )
+            # CSS: font-size:0.8em; color:#aaa; font-style:italic; opacity:0.8
+            trans_text = self._html_to_spans(translation, base_size=11, base_color="#aaaaaa", base_italic=True)
+            trans_text.opacity = 0.8
+            context_controls.append(trans_text)
         
         return self._full_width_section(
             "CONTEXT",
@@ -706,25 +814,35 @@ class CardPreviewView:
     
     def _build_footer_section(self, style: Dict[str, str]) -> ft.Row:
         """Build the footer controls section."""
+        # CSS: .pill-btn { width: 120px; height: 36px; background: white;
+        #   border: 1px solid #ced4da; color: #495057; border-radius: 20px;
+        #   font-size: 0.85em; font-weight: 600 }
+        def pill_button(label: str) -> ft.Container:
+            return ft.Container(
+                content=ft.Text(label, size=11, color="#495057",
+                               weight=ft.FontWeight.W_600, text_align=ft.TextAlign.CENTER),
+                width=120,
+                height=36,
+                bgcolor="#ffffff",
+                border=ft.border.all(1, "#ced4da"),
+                border_radius=20,
+                alignment=ft.Alignment(0, 0),
+            )
+
         return ft.Row(
             controls=[
                 ft.Container(
                     content=ft.Row(
                         controls=[
-                            ft.ElevatedButton(
-                                content=ft.Row([ft.Text("🔊 Forvo")], spacing=5),
-                                disabled=True,
-                            ),
-                            ft.ElevatedButton(
-                                content=ft.Row([ft.Text("🎧 Listen")], spacing=5),
-                                disabled=True,
-                            ),
+                            pill_button("🔊 Forvo"),
+                            pill_button("🎧 Listen"),
                         ],
                         alignment=ft.MainAxisAlignment.CENTER,
                         spacing=15,
                     ),
                     padding=15,
                     bgcolor=style.get("card_bg", "#1e1e2e"),
+                    border=ft.border.only(top=ft.BorderSide(1, style.get("section_border", "#f2f2f2"))),
                     expand=True,
                 )
             ],
@@ -740,10 +858,11 @@ class CardPreviewView:
         if not tag_list:
             return None
         
+        # CSS: .tag-pill { background: var(--section-border); padding: 2px 8px; border-radius: 10px }
         tag_pills = [
             ft.Container(
                 content=ft.Text(tag, size=10, color=style.get("label_color", "#9aa0a6")),
-                bgcolor=style.get("card_bg", "#1e1e2e"),
+                bgcolor=style.get("section_border", "#f2f2f2"),
                 padding=ft.Padding.symmetric(horizontal=8, vertical=3),
                 border_radius=10,
             )
@@ -772,39 +891,18 @@ class CardPreviewView:
                             ft.Text(label, size=9, color=style.get("label_color", "#9aa0a6"), 
                                    weight=ft.FontWeight.W_800),
                             ft.Container(height=5),
-                            ft.Row(
-                                controls=[content],
-                                expand=True,
-                            ),
+                            content,
                         ],
                         spacing=0,
                         expand=True,
-                        horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
                     ),
                     padding=12,
                     bgcolor=style.get("container_bg", "#1b1b1b"),
                     border=ft.border.only(bottom=ft.BorderSide(1, style.get("section_border", "#f2f2f2"))),
                     expand=True,
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
                 )
             ],
-            expand=True,
-        )
-    
-    def _section(self, label: str, content: ft.Control) -> ft.Container:
-        """Create a labeled section (deprecated, use _full_width_section)."""
-        return ft.Container(
-            content=ft.Column(
-                controls=[
-                    ft.Text(label, size=9, color=ft.Colors.WHITE54, 
-                           weight=ft.FontWeight.W_800),
-                    ft.Container(height=5),
-                    content,
-                ],
-                spacing=0,
-            ),
-            padding=12,
-            bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.WHITE),
-            border=ft.border.only(bottom=ft.BorderSide(1, ft.Colors.WHITE10)),
             expand=True,
         )
     

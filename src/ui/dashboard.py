@@ -165,21 +165,28 @@ class DashboardView:
             clip_behavior=ft.ClipBehavior.HARD_EDGE,  # overflow-hidden
         )
     
+    _LANG_FLAGS: dict[str, str] = {"DE": "\U0001F1E9\U0001F1EA", "EN": "\U0001F1EC\U0001F1E7"}
+    _LANG_NAMES: dict[str, str] = {"DE": "Deutsch", "EN": "English"}
+
     def _build_header(self) -> ft.Container:
         """Build the header section with language switcher in top-right."""
-        # Language indicator - now in global header
+        lang = Config.CURRENT_LANG
+        flag = self._LANG_FLAGS.get(lang, "")
+        name = self._LANG_NAMES.get(lang, lang)
+
+        # Language indicator - flag + name
         self._lang_indicator = ft.Container(
             content=ft.Row(
                 controls=[
-                    ft.Icon(ft.Icons.LANGUAGE, color=DesignTokens.TEXT_TERTIARY, size=18),
+                    ft.Text(flag, size=16) if flag else ft.Icon(ft.Icons.LANGUAGE, color=DesignTokens.TEXT_TERTIARY, size=18),
                     ft.Text(
-                        Config.CURRENT_LANG,
+                        name,
                         size=14,
                         weight=ft.FontWeight.W_600,
                         color=DesignTokens.TEXT_SECONDARY,
                     ),
                 ],
-                spacing=6,
+                spacing=8,
             ),
             padding=ft.Padding.symmetric(horizontal=14, vertical=8),
             border_radius=DesignTokens.RADIUS_SM,
@@ -214,6 +221,21 @@ class DashboardView:
             ),
             padding=ft.Padding.only(bottom=DesignTokens.SPACING_SM),
         )
+
+    def refresh_lang_indicator(self) -> None:
+        """Update the language badge from current Config."""
+        lang = Config.CURRENT_LANG
+        flag = self._LANG_FLAGS.get(lang, "")
+        name = self._LANG_NAMES.get(lang, lang)
+        indicator_row = self._lang_indicator.content
+        if isinstance(indicator_row, ft.Row) and len(indicator_row.controls) >= 2:
+            # Update flag
+            ctrl = indicator_row.controls[0]
+            if isinstance(ctrl, ft.Text):
+                ctrl.value = flag
+            # Update name
+            indicator_row.controls[1].value = name
+            self._lang_indicator.update()
     
     def _build_control_section(self) -> ft.Container:
         """Build the main build control section with flex column layout."""
@@ -774,12 +796,17 @@ class DashboardView:
             # Start polling progress queue on UI thread
             self._start_progress_polling()
 
-            # Run the build in a background thread to avoid UI freezes
-            success, output_path, stats = await asyncio.to_thread(
-                self._run_build_sync,
-                builder,
-                Config.CSV_FILE,
-            )
+            # Run the async build directly — builder.build() is async and
+            # handles its own concurrency via asyncio.gather + semaphores.
+            # Export runs sync and is fast, so we wrap only that in to_thread.
+            success = await builder.build(Config.CSV_FILE)
+
+            if success:
+                # Export is CPU/IO-bound (genanki packaging), run in thread
+                output_path = await asyncio.to_thread(
+                    self._run_export_sync, builder
+                )
+                stats = builder.stats.get_all()
 
             if success:
                 self._add_log_entry("Build completed successfully!", "success")
@@ -789,13 +816,9 @@ class DashboardView:
                 self._add_log_entry("💡 Tip: If card layout looks wrong in Anki, delete the old deck and re-import", "info")
                 self._show_success_dialog(output_path, stats)
             else:
-                error_detail = stats.get("error", "") if stats else ""
                 self._add_log_entry("Build failed!", "error")
-                if error_detail:
-                    self._add_log_entry(f"Error: {error_detail}", "error")
                 self._show_error_dialog("Build Failed", 
-                    f"The build process did not complete successfully.\n\n{error_detail}" if error_detail 
-                    else "The build process did not complete successfully.")
+                    "The build process did not complete successfully.")
         
         except Exception as e:
             self._add_log_entry(f"Error: {str(e)}", "error")
@@ -811,23 +834,15 @@ class DashboardView:
                 self._progress_text.value = "0%"
             self.page.update()
 
-    def _run_build_sync(self, builder: AnkiDeckBuilder, csv_file: str) -> tuple:
-        """Run build and export in a background thread."""
-        try:
-            success = asyncio.run(builder.build(csv_file))
-            if not success:
-                return False, "", {}
-            builder.export()
-            output_path = os.path.join(
-                Config.OUTPUT_DIR,
-                f"ankitect_{Config.CURRENT_LANG.lower()}.apkg"
-            )
-            return True, os.path.abspath(output_path), builder.stats.get_all()
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return False, "", {"error": str(e)}
-    
+    def _run_export_sync(self, builder: AnkiDeckBuilder) -> str:
+        """Run export in a background thread (CPU/IO-bound, no async needed)."""
+        builder.export()
+        output_path = os.path.join(
+            Config.OUTPUT_DIR,
+            f"ankitect_{Config.CURRENT_LANG.lower()}.apkg"
+        )
+        return os.path.abspath(output_path)
+
     def _enqueue_progress(self, data: Dict[str, Any]) -> None:
         """Enqueue progress updates from background thread."""
         try:

@@ -8,6 +8,7 @@ Separates data access logic from UI layer, enabling:
 """
 
 import asyncio
+import atexit
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
@@ -17,7 +18,10 @@ from typing import Any, Dict, List, Optional, Callable, TYPE_CHECKING
 import pandas as pd
 
 from ..config import Config
+from ..utils.logger import get_logger
 from ..utils.parsing import TextParser
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from .repository import BaseRepository
@@ -114,8 +118,8 @@ class VocabularyService:
         for callback in self._change_callbacks:
             try:
                 callback()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Change callback failed: {e}")
     
     def load(self) -> bool:
         """
@@ -145,9 +149,31 @@ class VocabularyService:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, self.load)
     
+    def get_dataframe_ref(self) -> Optional[pd.DataFrame]:
+        """
+        Get a direct reference to the internal DataFrame (NOT a copy).
+        
+        Use this when the caller needs to mutate data in-place for performance
+        (e.g., real-time editing in the workbench). Caller must call
+        mark_dirty() after mutations to ensure proper save behavior.
+        
+        Returns:
+            Direct reference to the internal DataFrame, or None
+        """
+        if self._df is None:
+            self.load()
+        return self._df
+
+    def mark_dirty(self) -> None:
+        """Mark data as having unsaved changes (for external mutation callers)."""
+        self._dirty = True
+
     def save(self) -> bool:
         """
         Save vocabulary data to storage.
+        
+        Syncs the service's DataFrame to the repository before saving,
+        ensuring any in-memory mutations are persisted.
         
         Returns:
             True if saved successfully
@@ -156,6 +182,8 @@ class VocabularyService:
             return False
         
         repo = self._get_repository()
+        # Sync service DataFrame to repository before saving
+        repo._df = self._df.copy()
         success = repo.save()
         
         if success:
@@ -225,7 +253,7 @@ class VocabularyService:
             return True
             
         except Exception as e:
-            print(f"Error updating row: {e}")
+            logger.error(f"Error updating row: {e}")
             return False
     
     def add_row(self, data: Dict[str, Any]) -> int:
@@ -257,7 +285,7 @@ class VocabularyService:
             return len(self._df) - 1
             
         except Exception as e:
-            print(f"Error adding row: {e}")
+            logger.error(f"Error adding row: {e}")
             return -1
     
     def delete_row(self, index: int) -> bool:
@@ -280,7 +308,7 @@ class VocabularyService:
             return True
             
         except Exception as e:
-            print(f"Error deleting row: {e}")
+            logger.error(f"Error deleting row: {e}")
             return False
     
     def search(self, query: str, columns: Optional[List[str]] = None) -> pd.DataFrame:
@@ -473,12 +501,12 @@ class VocabularyService:
             imported = sqlite_repo.import_from_csv(str(self.csv_path))
             
             if imported > 0:
-                print(f"Migrated {imported} rows to SQLite")
+                logger.info(f"Migrated {imported} rows to SQLite")
                 return True
             return False
             
         except Exception as e:
-            print(f"Migration failed: {e}")
+            logger.error(f"Migration failed: {e}")
             return False
     
     def get_repository(self) -> "BaseRepository":
@@ -489,3 +517,7 @@ class VocabularyService:
             The repository instance (CSVRepository or SQLiteRepository)
         """
         return self._get_repository()
+
+
+# Register executor cleanup at process exit to avoid ResourceWarning
+atexit.register(VocabularyService._executor.shutdown, wait=False)

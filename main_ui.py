@@ -2,7 +2,7 @@
 AnkiTect: Modern GUI Application
 --------------------------------
 
-A macOS-inspired Flet interface for the AnkiTect deck builder.
+Flet-based interface for the AnkiTect deck builder.
 """
 
 import sys
@@ -13,12 +13,20 @@ _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# Initialize logging early, before any other imports
+from src.utils.logger import setup_logging
+setup_logging()
+
 import flet as ft
 from typing import Callable
 
+from src.config import Config
 from src.ui.workbench import WorkbenchView
 from src.ui.dashboard import DashboardView
 from src.ui.settings import SettingsView
+
+# Ensure Config has a fresh deck name on startup
+Config.reload_from_settings()
 
 
 # =============================================================================
@@ -107,14 +115,30 @@ class AnkiTectApp:
         self.page.window.height = 850
     
     def _init_views(self) -> None:
-        """Initialize all views eagerly — simpler and more reliable."""
+        """Initialize views — Workbench is lazy-loaded on first visit."""
         self._dashboard = DashboardView(self.page)
-        self._workbench = WorkbenchView(self.page)
+        self._workbench: WorkbenchView | None = None
+        self._workbench_loaded: bool = False
         self._settings_view = SettingsView(self.page)
-        
+
+        # Placeholder for workbench until user navigates there
+        self._workbench_placeholder = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.ProgressRing(width=40, height=40, color=ft.Colors.INDIGO_200),
+                    ft.Text("Loading Workbench…", size=14, color=ft.Colors.WHITE54),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=16,
+            ),
+            expand=True,
+            alignment=ft.Alignment(0, 0),
+        )
+
         self._views = [
             self._dashboard.container,
-            self._workbench.container,
+            self._workbench_placeholder,  # lazy — swapped on first visit
             self._settings_view.container,
         ]
         
@@ -254,8 +278,23 @@ class AnkiTectApp:
     
     def _switch_view(self, index: int) -> None:
         """Switch the active view by swapping content."""
+        # Lazy-init workbench on first visit
+        if index == 1 and not self._workbench_loaded:
+            self.current_view_index = index
+            self.content_area.content = self._workbench_placeholder
+            self.page.update()
+            self._workbench = WorkbenchView(self.page)
+            self._views[1] = self._workbench.container
+            self._workbench_loaded = True
+            self.content_area.content = self._views[1]
+            self.page.update()
+            return
+
         self.current_view_index = index
         self.content_area.content = self._views[index]
+        # Refresh dashboard language indicator when navigating back
+        if index == 0:
+            self._dashboard.refresh_lang_indicator()
         self.page.update()
     
     def navigate_to(self, index: int) -> None:

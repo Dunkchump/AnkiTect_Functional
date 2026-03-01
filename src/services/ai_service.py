@@ -21,6 +21,9 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from ..config import Config
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class AIProvider(Enum):
@@ -371,9 +374,11 @@ Wrap the target word in <b></b> tags."""
         try:
             response = await provider.complete(prompt, self.SYSTEM_PROMPTS["sentences"])
             sentences = [s.strip() for s in response.strip().split("\n") if s.strip()]
+            # Strip numbered list prefixes (e.g., "1. ", "2) ") that LLMs often add
+            sentences = [re.sub(r'^\d+[\.\)]\s*', '', s) for s in sentences]
             return sentences[:count]
         except Exception as e:
-            print(f"AI sentence generation failed: {e}")
+            logger.error(f"AI sentence generation failed: {e}")
             return []
     
     async def generate_mnemonic(
@@ -404,7 +409,7 @@ Use sound associations, visual imagery, or wordplay to make it memorable."""
             response = await provider.complete(prompt, self.SYSTEM_PROMPTS["mnemonic"])
             return response.strip()
         except Exception as e:
-            print(f"AI mnemonic generation failed: {e}")
+            logger.error(f"AI mnemonic generation failed: {e}")
             return ""
     
     async def enhance_image_prompt(
@@ -442,7 +447,7 @@ The image should clearly represent the concept."""
             response = await provider.complete(prompt, self.SYSTEM_PROMPTS["image_prompt"])
             return response.strip()
         except Exception as e:
-            print(f"AI image prompt generation failed: {e}")
+            logger.error(f"AI image prompt generation failed: {e}")
             return basic_prompt or f"A visual representation of {meaning}, {style}"
     
     async def translate_sentences(
@@ -480,7 +485,7 @@ The image should clearly represent the concept."""
                 translations.append("")
             return translations[:len(sentences)]
         except Exception as e:
-            print(f"AI translation failed: {e}")
+            logger.error(f"AI translation failed: {e}")
             return [""] * len(sentences)
     
     async def generate_etymology(
@@ -508,7 +513,7 @@ Keep it concise (2-3 sentences) and engaging for language learners."""
             response = await provider.complete(prompt)
             return response.strip()
         except Exception as e:
-            print(f"AI etymology generation failed: {e}")
+            logger.error(f"AI etymology generation failed: {e}")
             return ""
     
     async def batch_enhance(

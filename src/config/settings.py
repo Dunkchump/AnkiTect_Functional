@@ -1,6 +1,7 @@
 """Global settings and configuration."""
 
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -16,8 +17,8 @@ except ImportError:
 
 from .languages import LANG_CONFIG
 
-# Поточна обрана мова
-CURRENT_LANG = "DE"  # Options: "DE", "EN"
+# Default language when no settings are configured
+_DEFAULT_LANG = "DE"
 
 # Default sub-deck format (tokens: {year}, {month}, {month_name})
 SUBDECK_FORMAT_DEFAULT = "{year}.{month} | {month_name}"
@@ -27,22 +28,26 @@ SUBDECK_FORMAT_DEFAULT = "{year}.{month} | {month_name}"
 class Config:
     """Application-wide configuration."""
     
-    settings = LANG_CONFIG.get(CURRENT_LANG, LANG_CONFIG["DE"])
+    settings = LANG_CONFIG.get(_DEFAULT_LANG, LANG_CONFIG["DE"])
     
-    # Мовні параметри
-    CURRENT_LANG: str = CURRENT_LANG
+    # Language parameters
+    CURRENT_LANG: str = _DEFAULT_LANG
     MODEL_ID: int = settings["model_id"]
-    DECK_ID: int = 2059400400 if CURRENT_LANG == "EN" else 2059400410
+    DECK_ID: int = 2059400410
     
-    # Generate deck name dynamically with month and year
-    _month_names = settings["month_names"]
-    _current_month = datetime.now().month
-    _current_year = datetime.now().year
-    _month_name = _month_names[_current_month]
-    _subdeck = SUBDECK_FORMAT_DEFAULT.format(
-        year=_current_year, month=f"{_current_month:02d}", month_name=_month_name
-    )
-    DECK_NAME: str = f"{settings['deck_name']}::{_subdeck}"
+    # Generate deck name dynamically with current month and year
+    @classmethod
+    def _compute_deck_name(cls) -> str:
+        """Compute deck name with current date. Called at reload time."""
+        month_names = cls.settings.get("month_names", {})
+        now = datetime.now()
+        month_name = month_names.get(now.month, str(now.month))
+        subdeck = SUBDECK_FORMAT_DEFAULT.format(
+            year=now.year, month=f"{now.month:02d}", month_name=month_name
+        )
+        return f"{cls.settings['deck_name']}::{subdeck}"
+    
+    DECK_NAME: str = ""  # Set at reload time
     
     VOICE: str = settings["voice"]
     VOICE_ID: str = settings["voice_id"]
@@ -63,19 +68,18 @@ class Config:
     # NEVER hardcode secret keys in source code!
     POLLINATIONS_API_KEY: str = os.environ.get("POLLINATIONS_API_KEY", "")
     POLLINATIONS_API_URL: str = "https://gen.pollinations.ai/image"
-    POLLINATIONS_IMAGE_MODEL: str = "zimage"  # Options: zimage, flux, turbo, gptimage, seedream, nanobanana
+    POLLINATIONS_IMAGE_MODEL: str = "flux"
     
-    # Асинхронні налаштування
+    # Async settings
     CONCURRENCY: int = 4
     RETRIES: int = 5
     TIMEOUT: int = 60
     IMAGE_TIMEOUT: int = 90
     
-    # Cross-platform paths using pathlib
-    # BASE_DIR is the project root (parent of src/)
+    # Cross-platform paths
     BASE_DIR: Path = Path(__file__).parent.parent.parent.resolve()
     
-    # Шляхи до файлів (cross-platform compatible)
+    # File paths (cross-platform compatible)
     MEDIA_DIR: str = str(BASE_DIR / "media")
     CSV_FILE: str = str(BASE_DIR / "vocabulary.csv")
     CACHE_DIR: str = str(BASE_DIR / "data" / "cache")
@@ -89,7 +93,18 @@ class Config:
         
         Call this before each build to ensure Config reflects the latest
         saved settings without requiring an app restart.
+        
+        Thread-safe: uses a lock to prevent partial reads during reload.
         """
+        if not hasattr(cls, '_reload_lock'):
+            cls._reload_lock = threading.Lock()
+        
+        with cls._reload_lock:
+            cls._reload_from_settings_unlocked()
+    
+    @classmethod
+    def _reload_from_settings_unlocked(cls) -> None:
+        """Internal reload logic (caller must hold _reload_lock)."""
         from .config_manager import SettingsManager
         sm = SettingsManager()
         sm.reload()

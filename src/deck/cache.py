@@ -20,6 +20,9 @@ class CacheManager:
     Supports both sync and async operations.
     """
     
+    # Minimum file size in bytes to consider a cached file valid
+    MIN_CACHED_FILE_SIZE = 500
+    
     def __init__(self, cache_file: Optional[str] = None):
         """
         Initialize cache manager.
@@ -41,8 +44,22 @@ class CacheManager:
         self._batch_size = 10  # Write to disk every N entries
     
     def _get_async_lock(self) -> asyncio.Lock:
-        """Get or create async lock (lazy initialization, thread-safe)."""
-        if self._async_lock is None:
+        """Get or create async lock (lazy initialization, thread-safe).
+        
+        Creates the lock bound to the current running event loop.
+        If the event loop changes between calls (e.g., across builds),
+        a new lock is created for the new loop.
+        """
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        
+        if self._async_lock is None or (
+            current_loop is not None 
+            and hasattr(self._async_lock, '_loop') 
+            and getattr(self._async_lock, '_loop', None) is not current_loop
+        ):
             with self._async_lock_init_lock:
                 if self._async_lock is None:
                     self._async_lock = asyncio.Lock()
@@ -87,17 +104,19 @@ class CacheManager:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self._save_internal)
     
-    def is_cached(self, filename: str, min_size: int = 500) -> bool:
+    def is_cached(self, filename: str, min_size: int = None) -> bool:
         """
         Check if file is in cache and exists on disk.
         
         Args:
             filename: Filename to check
-            min_size: Minimum file size in bytes
+            min_size: Minimum file size in bytes (defaults to MIN_CACHED_FILE_SIZE)
             
         Returns:
             True if file is cached and valid, False otherwise
         """
+        if min_size is None:
+            min_size = self.MIN_CACHED_FILE_SIZE
         # Fast dict lookup under lock — no I/O
         with self._lock:
             if filename not in self.cache:

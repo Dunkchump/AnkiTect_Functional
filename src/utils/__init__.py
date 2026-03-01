@@ -6,6 +6,7 @@ from .helpers import (
     ensure_dir,
     get_file_size_mb,
 )
+from .logger import get_logger, setup_logging
 from .parsing import TextParser
 from .paths import MediaPathGenerator
 
@@ -14,6 +15,8 @@ __all__ = [
     'format_analogues_html',
     'ensure_dir',
     'get_file_size_mb',
+    'get_logger',
+    'setup_logging',
     'TextParser',
     'MediaPathGenerator',
 ]

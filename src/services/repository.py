@@ -6,17 +6,37 @@ Designed for future extensibility (PostgreSQL, cloud storage, etc.)
 """
 
 import hashlib
+import re
 import sqlite3
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Set
 
 import pandas as pd
 
 from ..config import Config
+from ..utils.logger import get_logger
 from ..utils.parsing import TextParser
+
+logger = get_logger(__name__)
+
+# Regex for validating SQL column names (only lowercase alphanumeric + underscore)
+_SAFE_COLUMN_RE = re.compile(r'^[a-z_][a-z0-9_]*$')
+
+# Whitelist of valid SQL column names for the vocabulary table
+_VALID_SQL_COLUMNS: Set[str] = {
+    'id', 'target_word', 'meaning', 'ipa', 'part_of_speech', 'gender',
+    'morphology', 'nuance', 'context_sentences', 'context_translation',
+    'etymology', 'mnemonic', 'analogues', 'image_prompt', 'tags', 'uuid',
+    'synced_to_deck', 'created_at', 'updated_at',
+}
+
+
+def _validate_column_name(name: str) -> bool:
+    """Validate that a column name is safe for SQL interpolation."""
+    return bool(_SAFE_COLUMN_RE.match(name) and name in _VALID_SQL_COLUMNS)
 
 
 class BaseRepository(ABC):
@@ -122,7 +142,7 @@ class CSVRepository(BaseRepository):
             return True
             
         except Exception as e:
-            print(f"Error loading CSV: {e}")
+            logger.error(f"Error loading CSV: {e}")
             self._df = pd.DataFrame()
             return False
     
@@ -141,7 +161,7 @@ class CSVRepository(BaseRepository):
             self._dirty = False
             return True
         except Exception as e:
-            print(f"Error saving CSV: {e}")
+            logger.error(f"Error saving CSV: {e}")
             return False
     
     def get_all(self) -> pd.DataFrame:
@@ -364,7 +384,7 @@ class SQLiteRepository(BaseRepository):
             self._init_schema()
             return True
         except Exception as e:
-            print(f"Error initializing SQLite: {e}")
+            logger.error(f"Error initializing SQLite: {e}")
             return False
     
     def save(self) -> bool:
@@ -378,7 +398,7 @@ class SQLiteRepository(BaseRepository):
                 df = pd.read_sql_query("SELECT * FROM vocabulary ORDER BY id", conn)
                 return self._sql_to_csv_columns(df)
         except Exception as e:
-            print(f"Error reading vocabulary: {e}")
+            logger.error(f"Error reading vocabulary: {e}")
             return pd.DataFrame()
     
     def get_row(self, index: int) -> Optional[pd.Series]:
@@ -430,7 +450,7 @@ class SQLiteRepository(BaseRepository):
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
-            print(f"Error updating row: {e}")
+            logger.error(f"Error updating row: {e}")
             return False
     
     def add_row(self, data: Dict[str, Any]) -> int:
@@ -461,7 +481,7 @@ class SQLiteRepository(BaseRepository):
                 cursor.execute("SELECT COUNT(*) FROM vocabulary")
                 return cursor.fetchone()[0] - 1
         except Exception as e:
-            print(f"Error adding row: {e}")
+            logger.error(f"Error adding row: {e}")
             return -1
     
     def delete_row(self, index: int) -> bool:
@@ -501,6 +521,10 @@ class SQLiteRepository(BaseRepository):
                 search_cols = ["target_word", "meaning"] if not columns else [
                     self._csv_to_sql_column_name(c) for c in columns
                 ]
+                # Validate all column names before interpolation
+                search_cols = [c for c in search_cols if _validate_column_name(c)]
+                if not search_cols:
+                    return pd.DataFrame()
                 
                 conditions = " OR ".join(f"{col} LIKE ?" for col in search_cols)
                 params = [f"%{query}%" for _ in search_cols]
@@ -584,8 +608,23 @@ class SQLiteRepository(BaseRepository):
             
         Returns:
             Number of rows imported
+            
+        Raises:
+            ValueError: If the path is outside allowed directories
         """
-        csv_repo = CSVRepository(csv_path)
+        # Validate path is within allowed directories (prevent path traversal)
+        resolved = Path(csv_path).resolve()
+        allowed_dirs = [
+            Path(Config.INPUT_DIR).resolve(),
+            Path(Config.BASE_DIR).resolve(),
+        ]
+        if not any(self._is_subpath(resolved, allowed) for allowed in allowed_dirs):
+            raise ValueError(
+                f"Import path must be within project directories. "
+                f"Got: {resolved}"
+            )
+        
+        csv_repo = CSVRepository(str(resolved))
         if not csv_repo.load():
             return 0
         
@@ -600,6 +639,15 @@ class SQLiteRepository(BaseRepository):
                 imported += 1
         
         return imported
+    
+    @staticmethod
+    def _is_subpath(path: Path, parent: Path) -> bool:
+        """Check if path is a subpath of parent."""
+        try:
+            path.relative_to(parent)
+            return True
+        except ValueError:
+            return False
     
     def export_to_csv(self, csv_path: str) -> bool:
         """Export vocabulary to CSV file."""
@@ -657,13 +705,19 @@ class SQLiteRepository(BaseRepository):
         return mapping.get(sql_name, sql_name)
     
     def _csv_to_sql_columns(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert CSV column names to SQL column names in dict."""
-        return {
-            self._csv_to_sql_column_name(k): (
-                TextParser.normalize_unicode(v) if isinstance(v, str) else v
-            )
-            for k, v in data.items()
-        }
+        """Convert CSV column names to SQL column names in dict.
+        
+        Only includes columns whose mapped SQL names pass whitelist validation.
+        Unrecognized or unsafe column names are silently dropped to prevent
+        SQL injection via crafted column names.
+        """
+        result = {}
+        for k, v in data.items():
+            sql_name = self._csv_to_sql_column_name(k)
+            if not _validate_column_name(sql_name):
+                continue  # Drop unrecognized/unsafe column names
+            result[sql_name] = TextParser.normalize_unicode(v) if isinstance(v, str) else v
+        return result
     
     def _sql_to_csv_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Convert SQL DataFrame columns to CSV column names."""

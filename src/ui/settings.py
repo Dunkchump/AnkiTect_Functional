@@ -68,6 +68,27 @@ class SettingsView:
 
     _LANG_FLAGS: Dict[str, str] = {"DE": "\U0001F1E9\U0001F1EA", "EN": "\U0001F1EC\U0001F1E7"}
 
+    # Official Pollinations image models (from enter.pollinations.ai pricing)
+    # Format: model_id -> (display_name, images_per_pollen, is_free)
+    IMAGE_MODELS_INFO: list[tuple[str, str, str, bool]] = [
+        # (key, label, cost_info, is_free)
+        ("flux",           "Flux Schnell",        "~5 000 img/pollen",  True),
+        ("zimage",         "Z-Image Turbo",       "~5 000 img/pollen",  True),
+        ("gptimage",       "GPT Image 1 Mini",    "~75 img/pollen",     True),
+        ("klein",          "FLUX.2 Klein 4B",     "~150 img/pollen",    True),
+        ("klein-large",    "FLUX.2 Klein 9B",     "~85 img/pollen",     True),
+        ("seedream",       "Seedream 4.0",        "~35 img/pollen",     False),
+        ("kontext",        "FLUX.1 Kontext",      "~25 img/pollen",     False),
+        ("nanobanana",     "NanoBanana",          "~25 img/pollen",     False),
+        ("seedream-pro",   "Seedream 4.5 Pro",    "~25 img/pollen",     False),
+        ("gptimage-large", "GPT Image 1.5",       "~15 img/pollen",     False),
+        ("nanobanana-pro", "NanoBanana Pro",      "~7 img/pollen",      False),
+    ]
+
+    IMAGE_MODEL_OPTIONS: Dict[str, str] = {
+        m[0]: m[1] for m in IMAGE_MODELS_INFO
+    }
+
     def __init__(self, page: ft.Page) -> None:
         self.page = page
         self.settings = SettingsManager()
@@ -86,6 +107,7 @@ class SettingsView:
         self._image_timeout_field: Optional[ft.TextField] = None
         self._retries_field: Optional[ft.TextField] = None
         self._performance_switch: Optional[ft.Switch] = None
+        self._image_model_dropdown: Optional[ft.Dropdown] = None
         self._save_btn: Optional[ft.Container] = None
 
         self._has_changes: bool = False
@@ -225,7 +247,11 @@ class SettingsView:
         return self._section(
             "Language & Deck", ft.Icons.TRANSLATE_ROUNDED,
             [
-                self._lang_dropdown,
+                ft.Row(
+                    controls=[self._lang_dropdown, self._lang_badge],
+                    spacing=14,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
                 ft.Container(height=4),
                 ft.Text("Deck Naming", size=13, weight=ft.FontWeight.W_500,
                          color=DT.TEXT_SECONDARY),
@@ -243,6 +269,7 @@ class SettingsView:
 
     def _build_api_section(self) -> ft.Container:
         current_key = self.settings.get("POLLINATIONS_API_KEY", "")
+        current_model = self.settings.get("POLLINATIONS_IMAGE_MODEL", "flux")
 
         self._api_key_field = _styled_field(
             value=current_key,
@@ -252,21 +279,121 @@ class SettingsView:
             password=True,
         )
 
+        # Build dropdown options with free/paid markers
+        dropdown_options = []
+        for key, label, cost, is_free in self.IMAGE_MODELS_INFO:
+            tag = "\u2714 FREE" if is_free else "\U0001F48E PAID"
+            dropdown_options.append(
+                ft.dropdown.Option(key=key, text=f"{label}  ({tag})")
+            )
+
+        self._image_model_dropdown = ft.Dropdown(
+            value=current_model if current_model in self.IMAGE_MODEL_OPTIONS else "flux",
+            options=dropdown_options,
+            label="Image Generation Model",
+            border_color=ft.Colors.WHITE12,
+            focused_border_color=ft.Colors.INDIGO_200,
+            label_style=ft.TextStyle(color=ft.Colors.WHITE54, size=12),
+            text_style=ft.TextStyle(color=ft.Colors.WHITE, size=14),
+            border_radius=DT.RADIUS_SM,
+            width=320,
+            on_select=lambda _: self._mark_changed(),
+        )
+
         info_row = ft.Container(
             content=ft.Row(
                 controls=[
                     ft.Icon(ft.Icons.OPEN_IN_NEW, size=13, color=ft.Colors.TEAL_200),
-                    ft.Text("Get your key at pollinations.ai",
+                    ft.Text("Get your key at enter.pollinations.ai",
                             size=11, color=ft.Colors.TEAL_200),
                 ],
                 spacing=6,
             ),
         )
 
+        # Build pricing info table
+        pricing_rows: list[ft.Control] = []
+        # Header
+        pricing_rows.append(ft.Row(
+            controls=[
+                ft.Text("Model", size=11, weight=ft.FontWeight.W_600,
+                        color=DT.TEXT_SECONDARY, width=150),
+                ft.Text("Cost", size=11, weight=ft.FontWeight.W_600,
+                        color=DT.TEXT_SECONDARY, width=130),
+                ft.Text("Access", size=11, weight=ft.FontWeight.W_600,
+                        color=DT.TEXT_SECONDARY, width=70),
+            ],
+            spacing=4,
+        ))
+        pricing_rows.append(ft.Divider(height=1, color=ft.Colors.WHITE10))
+
+        for key, label, cost, is_free in self.IMAGE_MODELS_INFO:
+            access_color = "#66BB6A" if is_free else "#FFA726"
+            access_text = "\u2714 Free" if is_free else "\U0001F48E Paid"
+            pricing_rows.append(ft.Row(
+                controls=[
+                    ft.Text(label, size=11, color=DT.TEXT_PRIMARY, width=150),
+                    ft.Text(cost, size=11, color=DT.TEXT_MUTED,
+                            font_family=DT.FONT_MONO, width=130),
+                    ft.Text(access_text, size=11, color=access_color, width=70),
+                ],
+                spacing=4,
+            ))
+
+        pricing_table = ft.Container(
+            content=ft.Column(controls=pricing_rows, spacing=3),
+            padding=ft.Padding.all(12),
+            border_radius=DT.RADIUS_SM,
+            bgcolor=ft.Colors.with_opacity(0.04, ft.Colors.WHITE),
+            border=ft.Border.all(1, ft.Colors.WHITE10),
+        )
+
+        # Legend
+        legend = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.INFO_OUTLINE, size=13, color=DT.TEXT_MUTED),
+                            ft.Text(
+                                "1 pollen = daily free credit. "
+                                "FREE models work with daily tier grant.",
+                                size=11, color=DT.TEXT_MUTED,
+                            ),
+                        ],
+                        spacing=6,
+                    ),
+                    ft.Row(
+                        controls=[
+                            ft.Icon(ft.Icons.DIAMOND_OUTLINED, size=13, color="#FFA726"),
+                            ft.Text(
+                                "PAID models require purchased pollen (not daily grant).",
+                                size=11, color="#FFA726",
+                            ),
+                        ],
+                        spacing=6,
+                    ),
+                ],
+                spacing=4,
+            ),
+        )
+
         return self._section(
-            "API Keys", ft.Icons.VPN_KEY_ROUNDED,
-            [info_row, self._api_key_field],
-            subtitle="Credentials for image generation",
+            "API & Image Generation", ft.Icons.VPN_KEY_ROUNDED,
+            [
+                info_row,
+                self._api_key_field,
+                ft.Container(height=8),
+                ft.Text("Image Model", size=13, weight=ft.FontWeight.W_500,
+                         color=DT.TEXT_SECONDARY),
+                self._image_model_dropdown,
+                ft.Container(height=8),
+                ft.Text("Model Pricing", size=13, weight=ft.FontWeight.W_500,
+                         color=DT.TEXT_SECONDARY),
+                pricing_table,
+                legend,
+            ],
+            subtitle="API credentials & image generation model",
             accent="#00897B",
         )
 
@@ -347,23 +474,31 @@ class SettingsView:
             self._build_performance_section(),
         ]
 
-        # Save button
-        self._save_btn = ft.Container(
+        # Save button — polished elevated button
+        self._save_btn = ft.ElevatedButton(
             content=ft.Row(
                 controls=[
-                    ft.Icon(ft.Icons.SAVE_ROUNDED, size=18, color="#FFF"),
+                    ft.Icon(ft.Icons.SAVE_ROUNDED, size=18),
                     ft.Text("Save Settings", size=14,
-                            weight=ft.FontWeight.W_600, color="#FFF"),
+                            weight=ft.FontWeight.W_600),
                 ],
-                spacing=8, alignment=ft.MainAxisAlignment.CENTER,
+                spacing=8,
+                alignment=ft.MainAxisAlignment.CENTER,
             ),
-            padding=ft.Padding.symmetric(horizontal=32, vertical=14),
-            border_radius=DT.RADIUS_SM,
-            bgcolor=DT.ACCENT_PRIMARY,
+            style=ft.ButtonStyle(
+                color=DT.TEXT_PRIMARY,
+                bgcolor={
+                    ft.ControlState.DEFAULT: DT.ACCENT_PRIMARY,
+                    ft.ControlState.HOVERED: DT.ACCENT_PRIMARY_HOVER,
+                    ft.ControlState.PRESSED: "#6A3FE0",
+                },
+                shape=ft.RoundedRectangleBorder(radius=DT.RADIUS_SM),
+                elevation={"default": 2, "hovered": 4},
+                padding=ft.Padding.symmetric(horizontal=28, vertical=14),
+                animation_duration=150,
+            ),
+            height=DT.BUTTON_HEIGHT_LG,
             on_click=self._on_save_click,
-            on_hover=self._on_save_hover,
-            ink=True,
-            animate=ft.Animation(150, ft.AnimationCurve.EASE_OUT),
         )
 
         reset_btn = ft.TextButton(
@@ -373,6 +508,11 @@ class SettingsView:
                     ft.Text("Reset to Defaults", size=13, color=DT.TEXT_MUTED),
                 ],
                 spacing=6,
+                tight=True,
+            ),
+            style=ft.ButtonStyle(
+                padding=ft.Padding.symmetric(horizontal=16, vertical=10),
+                shape=ft.RoundedRectangleBorder(radius=DT.RADIUS_SM),
             ),
             on_click=self._on_reset_click,
         )
@@ -431,13 +571,15 @@ class SettingsView:
     def _on_language_change(self, e: ft.ControlEvent) -> None:
         """Language changed — update deck name placeholder + preview."""
         self._mark_changed()
-        lang = self._lang_dropdown.value if self._lang_dropdown else "DE"
+        # Read selected value from event data (more reliable in Flet 0.80.1)
+        lang = getattr(e, 'data', None) or (self._lang_dropdown.value if self._lang_dropdown else "DE")
         lang_cfg = LANG_CONFIG.get(lang, LANG_CONFIG["DE"])
 
         if self._deck_name_field:
             self._deck_name_field.hint_text = lang_cfg["deck_name"]
         if self._lang_badge:
             self._lang_badge.value = f"{self._LANG_FLAGS.get(lang, '')}  {lang}"
+            self._lang_badge.update()
 
         self._update_deck_preview()
 
@@ -478,13 +620,6 @@ class SettingsView:
         self._mark_changed()
         self.page.update()
 
-    def _on_save_hover(self, e: ft.HoverEvent) -> None:
-        if self._save_btn:
-            self._save_btn.bgcolor = (
-                DT.ACCENT_PRIMARY_HOVER if e.data == "true" else DT.ACCENT_PRIMARY
-            )
-            self._save_btn.update()
-
     def _on_save_click(self, e) -> None:
         try:
             lang = self._lang_dropdown.value if self._lang_dropdown else "DE"
@@ -497,11 +632,14 @@ class SettingsView:
             deck_name = (self._deck_name_field.value or "").strip() if self._deck_name_field else ""
             subdeck_fmt = (self._subdeck_format_field.value or "").strip() if self._subdeck_format_field else ""
 
+            image_model = self._image_model_dropdown.value if self._image_model_dropdown else "flux"
+
             self.settings.batch_set({
                 "CURRENT_LANG": lang,
                 "DECK_NAME": deck_name,
                 "SUBDECK_FORMAT": subdeck_fmt,
                 "POLLINATIONS_API_KEY": api_key,
+                "POLLINATIONS_IMAGE_MODEL": image_model,
                 "CONCURRENCY": concurrency,
                 "TIMEOUT": timeout,
                 "IMAGE_TIMEOUT": img_timeout,
@@ -536,6 +674,9 @@ class SettingsView:
             self._subdeck_format_field.value = g("SUBDECK_FORMAT", "")
         if self._api_key_field:
             self._api_key_field.value = g("POLLINATIONS_API_KEY", "")
+        if self._image_model_dropdown:
+            model = g("POLLINATIONS_IMAGE_MODEL", "flux")
+            self._image_model_dropdown.value = model if model in self.IMAGE_MODEL_OPTIONS else "flux"
         if self._concurrency_slider:
             v = g("CONCURRENCY", 4)
             self._concurrency_slider.value = v

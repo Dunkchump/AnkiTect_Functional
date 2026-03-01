@@ -2,8 +2,8 @@
 
 import asyncio
 import os
+import threading
 import urllib.parse
-import sys
 import uuid
 from typing import Optional, Callable
 
@@ -11,7 +11,10 @@ import aiohttp
 import aiofiles
 
 from ..config import Config
+from ..utils.logger import get_logger
 from .base import BaseFetcher
+
+logger = get_logger(__name__)
 
 
 # Image format magic bytes for validation
@@ -50,10 +53,14 @@ class ImageFetcher(BaseFetcher):
         self.retries = Config.RETRIES
         self._session: Optional[aiohttp.ClientSession] = None
         self._session_lock: Optional[asyncio.Lock] = None
-        self._lock_init_lock = __import__('threading').Lock()
+        self._lock_init_lock = threading.Lock()
     
     def _get_lock(self) -> asyncio.Lock:
-        """Lazily create the session lock in the correct event loop context (thread-safe)."""
+        """Lazily create the session lock in the correct event loop context (thread-safe).
+        
+        If the event loop has changed (e.g., between builds), creates a new lock
+        for the current loop to avoid RuntimeError.
+        """
         if self._session_lock is None:
             with self._lock_init_lock:
                 if self._session_lock is None:
@@ -61,7 +68,10 @@ class ImageFetcher(BaseFetcher):
         return self._session_lock
     
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create a shared aiohttp session (connection pooling)."""
+        """Get or create a shared aiohttp session (connection pooling).
+        
+        Creates a new session if the previous one was closed (e.g., between builds).
+        """
         async with self._get_lock():
             if self._session is None or self._session.closed:
                 headers = {
@@ -99,7 +109,7 @@ class ImageFetcher(BaseFetcher):
     async def _download_from_api(self, prompt: str, output_path: str) -> bool:
         """Generate and download image directly from Pollinations API."""
         if not Config.POLLINATIONS_API_KEY:
-            print("  [!] No API key configured - set POLLINATIONS_API_KEY")
+            logger.warning("No API key configured - set POLLINATIONS_API_KEY")
             return False
         
         session = await self._get_session()
@@ -149,26 +159,25 @@ class ImageFetcher(BaseFetcher):
                             # Check magic bytes to debug
                             magic = content[:10] if content else b''
                             msg = f"  [!] Invalid image: {len(content)} bytes, magic: {magic[:4]}"
-                            print(msg, flush=True)
-                            sys.stdout.flush()
+                            logger.warning(msg)
                             if attempt < self.retries - 1:
                                 await asyncio.sleep(2 ** (attempt + 1))
                     elif response.status == 401:
-                        print(f"  [!] API Auth failed (401) - check your API key")
+                        logger.error("API Auth failed (401) - check your API key")
                         return False
                     elif response.status == 429:
-                        print(f"  [!] API Rate limit (429), waiting...")
+                        logger.warning("API Rate limit (429), waiting...")
                         if self.concurrency_callback:
                             self.concurrency_callback(status_code=429, is_success=False)
                         await asyncio.sleep(5 * (2 ** attempt))
                     else:
-                        print(f"  [!] API Error {response.status}")
+                        logger.warning(f"API Error {response.status}")
                         await asyncio.sleep(2 ** attempt)
             except asyncio.TimeoutError:
-                print(f"  [!] API Timeout, retrying...")
+                logger.warning("API Timeout, retrying...")
                 await asyncio.sleep(2 ** attempt)
             except Exception as e:
-                print(f"  [!] API Exception: {str(e)[:60]}")
+                logger.warning(f"API Exception: {str(e)[:60]}")
                 await asyncio.sleep(2 ** attempt)
         
         return False

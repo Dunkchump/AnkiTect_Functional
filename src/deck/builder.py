@@ -81,6 +81,14 @@ class AnkiDeckBuilder:
     
     # Minimum disk space required (in bytes) - 500MB safety margin
     MIN_DISK_SPACE_BYTES = 500 * 1024 * 1024
+    # Estimated bytes per word (image + audio files)
+    ESTIMATED_BYTES_PER_WORD = 500 * 1024
+    # Number of rows to process in each async batch
+    BUILD_BATCH_SIZE = 50
+    # Minimum file sizes for validation (bytes)
+    MIN_CACHE_FILE_SIZE = 500
+    MIN_IMAGE_SIZE = 2000
+    MIN_AUDIO_SIZE = 100
     
     def __init__(
         self,
@@ -245,8 +253,8 @@ class AnkiDeckBuilder:
         """
         try:
             disk_usage = shutil.disk_usage(Config.MEDIA_DIR)
-            # Estimate ~500KB per word (image + audio files)
-            estimated_bytes = estimated_words * 500 * 1024
+            # Estimate bytes needed
+            estimated_bytes = estimated_words * self.ESTIMATED_BYTES_PER_WORD
             required_bytes = estimated_bytes + self.MIN_DISK_SPACE_BYTES
             
             if disk_usage.free < required_bytes:
@@ -255,7 +263,8 @@ class AnkiDeckBuilder:
                 self._emit("log", f"⚠️ Low disk space: {free_mb:.0f}MB free, {required_mb:.0f}MB recommended")
                 return False
             return True
-        except Exception:
+        except Exception as e:
+            self._emit("log", f"⚠️ Could not check disk space: {e}")
             return True  # Proceed if we can't check
     
     def _adjust_concurrency(self, status_code: Optional[int] = None, is_success: Optional[bool] = None) -> None:
@@ -551,12 +560,33 @@ class AnkiDeckBuilder:
                 
                 # Helper: escape user text for safe HTML rendering in Anki cards
                 def _esc(val: str) -> str:
-                    """HTML-escape a value unless it already contains intentional HTML markup."""
+                    """HTML-escape a value, preserving only safe markup tags.
+                    
+                    Uses allowlist approach: only <b>, </b>, <br>, <br/>,
+                    <i>, </i>, <u>, </u> are preserved. All other HTML is escaped.
+                    """
+                    import re as _re_esc
                     s = str(val)
-                    # Don't escape fields that already contain intentional HTML (<b>, <br>, <img>, <table>)
-                    if '<b>' in s or '<br' in s or '<img' in s or '<table' in s or '<tr' in s:
-                        return s
-                    return html_mod.escape(s)
+                    # If no HTML-like content, just escape everything
+                    if '<' not in s:
+                        return html_mod.escape(s)
+                    # Allowlist: preserve only safe formatting tags
+                    _SAFE_TAG_RE = _re_esc.compile(
+                        r'<(/?)\s*(b|i|u|br)\s*(/?)\s*>',
+                        _re_esc.IGNORECASE
+                    )
+                    # Replace safe tags with placeholders
+                    placeholders = []
+                    def _save_tag(m):
+                        placeholders.append(m.group(0))
+                        return f'\x00SAFE{len(placeholders)-1}\x00'
+                    s = _SAFE_TAG_RE.sub(_save_tag, s)
+                    # Escape everything else
+                    s = html_mod.escape(s)
+                    # Restore safe tags from placeholders
+                    for i, tag in enumerate(placeholders):
+                        s = s.replace(f'\x00SAFE{i}\x00', tag)
+                    return s
                 
                 # Create note with card_uuid
                 note = genanki.Note(
@@ -667,9 +697,8 @@ class AnkiDeckBuilder:
         try:
             # Process in batches to avoid memory spike from creating all coroutines at once
             # This prevents OOM with large vocabularies (5000+ words)
-            batch_size = 50
-            for batch_start in range(0, len(df), batch_size):
-                batch_end = min(batch_start + batch_size, len(df))
+            for batch_start in range(0, len(df), self.BUILD_BATCH_SIZE):
+                batch_end = min(batch_start + self.BUILD_BATCH_SIZE, len(df))
                 batch_df = df.iloc[batch_start:batch_end]
                 tasks = [self.process_row(row.Index, row) for row in batch_df.itertuples(index=True, name="Row")]
                 await asyncio.gather(*tasks)
@@ -720,16 +749,29 @@ class AnkiDeckBuilder:
         self.stats.set('total_bytes', total_size)
         
         # Backup old file
+        backup_file = None
         if os.path.exists(output_file):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_file = output_file.replace(".apkg", f"_{timestamp}.apkg")
             os.rename(output_file, backup_file)
             self._emit("log", f"[*] Backup created: {backup_file}")
         
-        # Create package
-        package = genanki.Package(self.deck)
-        package.media_files = valid_media
-        package.write_to_file(output_file)
+        # Create package with error recovery
+        try:
+            package = genanki.Package(self.deck)
+            package.media_files = valid_media
+            package.write_to_file(output_file)
+        except Exception as e:
+            # Restore backup on failure
+            if backup_file and os.path.exists(backup_file):
+                try:
+                    os.rename(backup_file, output_file)
+                    self._emit("log", f"[!] Export failed, backup restored: {e}")
+                except Exception:
+                    self._emit("log", f"[!] Export failed and backup restore failed: {e}")
+            else:
+                self._emit("log", f"[!] Export failed: {e}")
+            raise
         
         self._print_statistics(output_file, total_size)
         self._cleanup_old_backups(output_file)

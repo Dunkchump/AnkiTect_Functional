@@ -2,18 +2,15 @@
 
 import copy
 import json
+import logging
 import os
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional
 
-# Load .env file if python-dotenv is available
-try:
-    from dotenv import load_dotenv
-    _env_path = Path(__file__).parent.parent.parent / ".env"
-    load_dotenv(_env_path)
-except ImportError:
-    pass
+logger = logging.getLogger("ankitect.config")
+
+# .env is already loaded by settings.py — no need to duplicate here
 
 
 class SettingsManager:
@@ -30,7 +27,7 @@ class SettingsManager:
     """
     
     _instance: Optional["SettingsManager"] = None
-    _lock: Lock = Lock()
+    _lock: Lock = Lock()  # Protects singleton creation AND all state access
     
     DEFAULT_SETTINGS_FILE: str = "settings.json"
     
@@ -147,7 +144,6 @@ class SettingsManager:
             
         self._settings_file: Path = Path(settings_file or self.DEFAULT_SETTINGS_FILE)
         self._settings: Dict[str, Any] = {}
-        self._file_lock: Lock = Lock()
         
         self._load_settings()
         self._initialized = True
@@ -177,7 +173,7 @@ class SettingsManager:
                     self._settings = self._deep_merge(self._settings, file_settings)
             except (json.JSONDecodeError, IOError) as e:
                 # Log error but continue with defaults
-                print(f"Warning: Could not load settings file: {e}")
+                logger.warning(f"Could not load settings file: {e}")
         
         # Override with environment variables (highest priority)
         for key in self.DEFAULTS:
@@ -218,8 +214,8 @@ class SettingsManager:
             return value
     
     def _save_settings(self) -> None:
-        """Save current settings to JSON file."""
-        with self._file_lock:
+        """Save current settings to JSON file (thread-safe via _lock)."""
+        with self._lock:
             try:
                 # Ensure parent directory exists
                 self._settings_file.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +223,7 @@ class SettingsManager:
                 with open(self._settings_file, "w", encoding="utf-8") as f:
                     json.dump(self._settings, f, indent=2, ensure_ascii=False)
             except IOError as e:
-                print(f"Warning: Could not save settings file: {e}")
+                logger.warning(f"Could not save settings file: {e}")
     
     def get(self, key: str, default: Any = None) -> Any:
         """
