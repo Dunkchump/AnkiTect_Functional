@@ -9,6 +9,7 @@ data/cache/
 voice_samples/
 .env
 settings.json
+vocabulary.csv
 
 # Python
 __pycache__/
