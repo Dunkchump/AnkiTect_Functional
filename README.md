@@ -1,8 +1,6 @@
 # 🎓 AnkiTect: Intelligent Anki Deck Generator
 
-[![Built With pollinations.ai](https://pollinations.ai/badge.svg)](https://pollinations.ai)
-
-> **Powered by [pollinations.ai](https://pollinations.ai)**
+[![Built With pollinations.ai](https://img.shields.io/badge/Built%20With-pollinations.ai-blueviolet)](https://pollinations.ai)
 
 
 > **Transform vocabulary lists into multimedia-rich Anki decks** with one command. AnkiTect generates cards with audio, images, etymologies, and mnemonics automatically.
